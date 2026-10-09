@@ -1,0 +1,223 @@
+# TouchBridge: a user-space touchscreen driver for the ARZOPA display
+
+> Working name **TouchBridge**. UPDD (Universal Pointing Device Driver) is Touch-Base Ltd's commercial product name, so we use our own name. It can be renamed at any point.
+> Location: `~/Projects/TouchBridge`. Step 1 of execution copies this plan into it as `docs/spec.md`.
+
+## Context
+
+The ARZOPA portable monitor has a built-in touch panel. macOS has no touchscreen support. Apple's generic HID driver treats the panel as an absolute pointer and maps each touch onto **whichever display the cursor is on**. Touching the ARZOPA while the cursor is on the MacBook therefore clicks the matching point on the MacBook screen.
+
+The trial app "Touchscreen Gestures" fixes the mapping but has no multitouch, and you plan to remove it. The goal is our own small agent that:
+
+- makes touch act on the ARZOPA at the touched point;
+- keeps the visible cursor on the MacBook screen;
+- supports tap, double-tap, drag, long-press right-click, two-finger scroll, pinch to zoom, rotate, and back/forward.
+
+## Verified facts about this Mac
+
+| Item | Value |
+|---|---|
+| Mac | MacBook Pro M3 Max (Mac15,11), macOS 15.7.3, Xcode 26.3, Swift 6.2.4, SIP on |
+| Signing | **No code-signing identity** in the keychain |
+| Displays | Built-in XDR (main) + **ARZOPA** 1920×1080@60. EDID vendor 7908, model 342. "Displays have separate Spaces" is ON, so ARZOPA has its own menu bar |
+| Touch panel | **ILITEK-TOUCH**, USB VID `0x222A` PID `0x0001`, PrimaryUsage 0x0D/0x04, 64-byte reports, claimed by Apple's `AppleUserHIDEventDriver` |
+| RID 4 (multitouch) | 10 slots × 5 bytes, starting at byte 1. Per slot: `b0` bits 0-5 = contact id, bit 6 = tip; X = LE16 (0–16384); Y = LE16 (0–9600). Then ScanTime LE32 @51, ContactCount @55, padding to 64 |
+| RID 5 (mouse fallback) | buttons @1, X LE16 @2, Y LE16 @4 (same ranges) |
+| Features | RID 2 = Contact Count Max (10). RID 6 = 256-byte vendor blob. No Input-Mode feature, so the host can't switch the panel's mode |
+| Physical size | 309.3 × 173.9 mm, about 6.2 px/mm |
+| Conflict | Touchscreen Gestures holds the panel exclusively (pid 69097). Its log shows a **non-root** process can seize the device once Accessibility is granted |
+| Prefs | Two-finger swipe navigation is ON, so a horizontal two-finger scroll already means back/forward in Safari and Chrome |
+
+## Decisions (confirmed with you)
+
+- **User-space agent.** A signed Swift menu-bar app; not DriverKit, no SIP changes.
+- **Direct-to-app delivery.** The cursor never moves: events go straight to the app under your finger with `CGEventPostToPid`, and focus doesn't change. Some gestures in some apps can't work that way. Those automatically use the **Warp** fallback: cursor hidden, jumps, acts, returns.
+- **v1 features:** tap, double-tap and triple-tap, drag, long-press right-click, two-finger scroll with momentum, pinch to zoom, two-finger rotate, back/forward.
+- **Not in v1:** three-finger Spaces/Mission Control, calibration screen.
+
+## Architecture
+
+```
+TouchBridge/                         (SwiftPM, no .xcodeproj)
+  Package.swift
+  Sources/TouchCore/                 pure Swift, no system frameworks, fully unit-tested
+    ReportParser.swift               RID 4 → TouchFrame; RID 5 → single contact
+    ContactTracker.swift             began/moved/ended per contact id, lift timeout, >3 contacts = palm → cancel
+    CoordinateMapper.swift           normalized → global CG point (display bounds, rotation 0/90/180/270)
+    GestureRecognizer.swift          state machine, injectable clock → [GestureAction]
+    Config.swift                     Codable thresholds and per-app overrides (~/Library/Application Support/TouchBridge/config.json)
+  Sources/TouchPlatform/             macOS I/O
+    HIDTouchSource.swift             IOHIDManager for matching/removal only; IOHIDDeviceOpen(dev, Seize);
+                                     timestamped input-report callback; serial user-interactive queue
+    DisplayLocator.swift             find ARZOPA by vendor/model/serial; bounds, rotation; reconfiguration callback
+    WindowLocator.swift              one CGWindowListCopyWindowInfo hit test per gesture → pid, window number, layer, owner
+    DeliveryPolicy.swift             picks Direct or Warp once per gesture (table below)
+    DirectDelivery.swift             CGEventPostToPid; location, fields 91/92 = window number, clickState, event number,
+                                     current modifier flags; tag field 42
+    WarpDelivery.swift               save cursor → (dlsym'd cursor-hide, optional) → post at HID tap → warp back
+                                     (CGWarpMouseCursorPosition + CGAssociateMouseAndMouseCursorPosition)
+    ScrollSynth.swift                CGEvent scroll, pixel units, continuous=1; phase field 99 (bitmask 1/2/4/8/128);
+                                     momentum field 123 (0/1/2/3, NOT a bitmask); own momentum generator
+    GestureSynth.swift               private gesture events: type 29 via field 55; subtype field 110 (Zoom 8, Rotation 5,
+                                     NavigationSwipe 16); amounts in 113/114; direction in 115; phase in 132
+    PressJournal.swift               records target pid + pressed button; sends mouse-up on quit, disable or relaunch
+  Sources/TouchBridgeApp/            NSStatusItem menu, onboarding, --probe mode, SMAppService agent
+  Tools/EventSink/                   test app that logs every received event (used for the M1 compatibility matrix)
+  Tests/TouchCoreTests/              unit tests + replay of recorded fixtures (golden action sequences)
+  scripts/bundle.sh                  swift build → TouchBridge.app (Info.plist LSUIElement,
+                                     Contents/Library/LaunchAgents/*.plist) → codesign with stable identity
+```
+
+**Data flow:**
+
+1. The HID report callback (serial queue, an `actor InputPipeline`) feeds `ReportParser`, then `ContactTracker`, then `GestureRecognizer`.
+2. Each `GestureAction` goes to `DeliveryPolicy`, which uses `WindowLocator` once per gesture.
+3. The action is then sent through Direct or Warp delivery, using `ScrollSynth` or `GestureSynth` where needed.
+4. `CoordinateMapper` uses `DisplayLocator`'s bounds, which update live when displays change.
+
+**Permissions:**
+
+- Accessibility (needed to post events, and on this Mac it also unlocks the seize).
+- Input Monitoring is requested only if opening the device still returns `kIOReturnNotPermitted`.
+- Grants apply only to a new process, so onboarding relaunches the app.
+- Signing with a stable self-signed certificate keeps the grants across rebuilds.
+
+## Gesture rules (thresholds in mm, converted with 6.2 px/mm)
+
+- **Nothing is posted until the gesture is classified.** Delivery is then fixed for the whole gesture, never switched halfway.
+- **Tap:** lift within 250 ms, moved less than 3 mm. **Double/triple-tap:** within `NSEvent.doubleClickInterval`, within 8 mm. Snap to the first tap's point and send clickState 2/3. Never delay the first click.
+- **Long-press:** hold ≥ 500 ms without moving → right-click on lift.
+- **Drag:** movement > 3 mm before 500 ms → left drag. **Hold-then-move:** drag-and-drop, always Warp.
+- **Two fingers:** the second contact lands within 150 ms. The gesture locks to one of:
+  - **scroll**: centroid moves; phased, with momentum;
+  - **pinch**: finger distance changes by more than 10% → magnify;
+  - **rotate**: angle changes by more than 10° → rotation.
+- **Back/forward = horizontal two-finger scroll.** It is not a separate gesture, which would navigate twice. Some apps only respond to swipe events; for those, an optional per-app setting sends the NavigationSwipe (16) event instead.
+- **More than 3 contacts** (palm): cancel. **Move events** are throttled to 60 Hz; phase changes are never coalesced. **Hover:** none in Direct mode.
+
+## Delivery policy
+
+| Gesture | Default | Forced to Warp when… |
+|---|---|---|
+| Tap / double / triple / long-press right-click | Direct | any rule below |
+| Immediate drag | Direct | title-bar zone (top 28 pt of the window or AX title bar), because WindowServer moves windows using the real cursor |
+| Hold-then-drag (drag-and-drop) | **Warp** | always |
+| Two-finger scroll | Direct | any rule below |
+| Pinch / rotate | Direct if M1 proves apps accept them, otherwise Warp | any rule below |
+
+**Rules that force Warp, checked in order:**
+
+1. Your per-app override.
+2. The app bundles Electron/CEF/Chromium frameworks (scanned once, cached).
+3. The window belongs to Dock, SystemUIServer, ControlCenter, NotificationCenter, Spotlight or WindowServer.
+4. The window layer is not 0 or 3.
+5. A popup menu (layer 101) is open, since a menu tracks the real cursor.
+6. No window is under the finger.
+
+**Focus:** "Activate app on tap" is an option, **off by default** as you chose. M1 will show whether controls swallow the first click in inactive windows. If so, we revisit this together.
+
+## Milestones (each ends with a gate; stop and check with you at each gate)
+
+**M0: Preparation** (I ask before each command that changes the system)
+- You create a self-signed code-signing certificate ("TouchBridge Dev", 10 years) in Keychain Access → Certificate Assistant. I'll give exact clicks. No Apple ID needed.
+- Pause Touchscreen Gestures without uninstalling it:
+  - quit its menu app;
+  - `launchctl bootout gui/501/com.touchscreen.gestures` and `…/com.touchscreen.gestures.maintenance`;
+  - then `launchctl disable` for both labels, because KeepAlive and the 10-minute maintenance job would restart it.
+- To undo: `launchctl enable` + `launchctl bootstrap gui/501 ~/Library/LaunchAgents/<plist>`.
+- *Gate:* ioreg shows no Touchscreen Gestures user client on the ILITEK device.
+
+**M1: Probes (answers the questions that decide everything else)**
+- (a) `TouchBridge.app --probe` seizes the panel and records raw frames to JSON: 1, 2 and 10 fingers, lift frames, ScanTime units, report rate, any RID 5 traffic, unplug and replug. It also reads feature reports 2 and 6 (safe reads).
+  - *Gate:* **RID 4 shows ≥ 2 simultaneous contacts.** If only RID 5 arrives, multitouch isn't possible on this panel, and v1 becomes single-touch plus long-press.
+- (b) EventSink plus a compatibility matrix:
+  - gestures: tap, double-tap, drag, right-click, scroll, pinch, rotate;
+  - × apps: EventSink, Finder, Safari, TextEdit, Preview, Maps, Terminal, System Settings, Chrome, VS Code, PhpStorm, Teams;
+  - × modes: Direct and Warp.
+  - *Gate:* the results fix the policy table and the focus default.
+- (c) DisplayLocator finds ARZOPA and correct bounds at rotation 0 and 90.
+
+**M2: TouchCore, tests first**
+- Parser, tracker, mapper (rotation and mirroring), recognizer, config.
+- *Gate:* `swift test` is green, and replaying the M1 recordings yields the expected golden action sequences.
+
+**M3: Single touch end to end**
+- Menu-bar app (enable/disable, status incl. "panel held by \<app>" read from ioreg, ARZOPA picker, quit), onboarding, seize, policy, Direct and Warp delivery, press journal, and a dry-run mode that logs instead of posting.
+- *Gate:* checklist items 1–11.
+
+**M4: Two fingers**
+- Scroll with momentum, pinch, rotate.
+- *Gate:* checklist items 12–13.
+
+**M5: Hardening**
+- Hotplug, sleep/wake, display rearrangement/resolution/mirroring, login agent via `SMAppService.agent(plistName:)` (KeepAlive on crash, Aqua session only), single-instance lock, per-app override menu, `os_log` (subsystem `com.theofanis.touchbridge`).
+- *Gate:* items 14–20, idle CPU about 0%, touch-to-event latency p95 < 15 ms.
+- **After that you uninstall Touchscreen Gestures.**
+
+## Verification checklist (on the hardware)
+
+1. Corners and centre land within 2 mm with the cursor on the MacBook; the cursor does not move.
+2. Same with the cursor on ARZOPA.
+3. Rearranging displays: no restart needed.
+4. Rotation 90/180/270.
+5. Resolution/scaling change; mirroring on and off.
+6. Unplug the touch USB, then the whole monitor: it resumes within 2 s.
+7. Sleep/wake and lid close.
+8. Quit gives back native behaviour; `kill -9` leaves no stuck button and the agent restarts.
+9. TextEdit: double-tap selects a word, triple-tap a paragraph.
+10. Long-press shows a context menu; tapping an item works.
+11. Text-selection drag, Finder drag-and-drop, title-bar window move (no jump).
+12. Safari: scroll, momentum, rubber-band; exactly one back-navigation per swipe.
+13. Pinch and rotate in Preview and Maps.
+14. ARZOPA menu bar, Dock, Control Center, notification banners.
+15. 10 fingers or a palm: no stray clicks.
+16. Using the trackpad during a touch drag.
+17. Chrome, Teams, VS Code: click, scroll, double-click.
+18. Typing after a tap goes where expected (given the focus setting).
+19. Permissions survive a rebuild.
+20. Energy use in Activity Monitor.
+
+Automated: `swift test` (TouchCore unit + replay tests). Logs: `log stream --predicate 'subsystem == "com.theofanis.touchbridge"'`.
+
+## Safety and rollback
+
+- Quitting or crashing releases the panel automatically, so macOS falls back to its default behaviour. The menu has Disable and Quit.
+- The press journal and quit handlers send a mouse-up for any held button.
+- Touchscreen Gestures stays installed (only paused) until M5 passes, so you can switch back with two commands.
+- Nothing runs as root, nothing touches SIP, no kernel or system extensions.
+
+## Risks
+
+- **Private gesture fields (pinch/rotate/nav-swipe)** could break in a future macOS. If they do, those gestures turn off and everything else keeps working.
+- **Direct-mode app compatibility.** Mitigated by the Warp rules and per-app overrides.
+- **The panel might send multitouch only after a host request.** M1 checks this; the fallback is single touch.
+- **The private cursor-hide call** is looked up at runtime. Without it, the cursor is briefly visible during Warp gestures.
+
+## References
+
+- Mac Mouse Fix `TouchSimulator.m` (gesture field usage): https://github.com/noah-nuebling/mac-mouse-fix
+- WebKit `CoreGraphicsTestSPI.h` (fields 110/113): https://webkit.googlesource.com/WebKit/+/54591b58a50e66aaad868f829cfce9d38eafed7b/Tools/TestRunnerShared/spi/CoreGraphicsTestSPI.h
+- mac-cua (CGEventPostToPid delivery and limits): https://glama.ai/mcp/servers/hyprcat/mac-cua
+- SDK `CoreGraphics.framework/Headers/CGEventTypes.h` (fields 0, 1, 42, 88, 91, 92, 93–100, 123)
+
+---
+
+## Implementation notes (2026-10-09)
+
+Findings from building and testing on the hardware. These override the plan where they differ.
+
+- **Panel:** sends only RID 4 frames, up to 10 contacts, about 143 Hz. It reports every frame while a finger is still, and sends one final tip=0 frame at lift. It needs no mode switch. UPDD, when it was installed, claimed the panel at USB level, so no HID device existed.
+- **HID:** IOHIDManager's device objects are already activated, and `IOHIDDevice.h` requires every Register call before activation. So each match gets its own `IOHIDDeviceCreate` device: open (seize), register, set the queue, then activate.
+- **Direct delivery:**
+  - `CGEventPostToPid` alone reaches the app with `windowNumber = 0`. AppKit reads the window from **field 51**, not 91/92, and needs the window-relative location, top-left origin, set with the private **`CGEventSetWindowLocation`**. Found by diffing window-server-routed events against posted ones in the Event Sink (`DirectTarget`).
+  - On an inactive app, clicks are swallowed (first-click rule) and pinches dropped; right-click and scroll arrive. So taps, drags, pinches and rotates activate the target app first (`NSRunningApplication.activate()`, no delay needed). The owner chose "focus follows touch" as the default, with a menu option to return focus.
+  - Standard controls (NSButton) fire on Direct taps. An early report to the contrary was taps 2–5 pt outside the button's bezel.
+- **Gestures (owner feedback):**
+  - Two-finger gestures are classified by finger motion: together → scroll, apart/together → pinch, around → rotate, decided after 4 mm of travel. The first version's "first threshold wins" turned sloppy scrolls into pinches.
+  - One-finger drag scrolls by default; hold-then-drag is click-and-drag.
+- **Window moves:** the window server performs them by following the real cursor, so they use Warp. The draggable area comes from the Accessibility API (`WindowDragRules`): toolbars (including their buttons, for pans), plain title bars and title text, but not text fields, tabs or value controls. Where Accessibility can't tell (Electron apps) or doesn't answer within 80 ms, the original 28 pt band applies. The fixed 28 pt band missed most of Safari's roughly 50 pt toolbar.
+- **Robustness (fixes from code review):**
+  - Disable → Enable creates a fresh IOHIDManager, because a cancelled one hits an IOKit assert.
+  - `Deliverer.abortGesture()` closes momentum, open phases and pressed buttons, and returns the cursor. It runs on Disable, on Quit, and when the touch display disappears mid-gesture.
+  - A Direct gesture that interrupts a Warp gesture returns the cursor immediately.
+  - Chromium/Electron apps are never queried through Accessibility, because queries make them build their accessibility tree.
