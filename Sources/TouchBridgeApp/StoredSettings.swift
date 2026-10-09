@@ -11,6 +11,8 @@ struct StoredSettings: Sendable {
     var returnFocus = false
     var threeFingerDrag: Bool
     var threeFingerAnchor: ThreeFingerAnchor = .centroid
+    /// While on, the trackpad's settings decide three-finger drag, scroll, pinch, rotate and momentum.
+    var followTrackpad = true
 
     private static var defaults: UserDefaults { .standard }
 
@@ -22,6 +24,7 @@ struct StoredSettings: Sendable {
         s.oneFingerScroll = d.object(forKey: "oneFingerScroll") as? Bool ?? true
         s.returnFocus = d.object(forKey: "returnFocus") as? Bool ?? false
         s.threeFingerAnchor = d.string(forKey: "threeFingerAnchor").flatMap(ThreeFingerAnchor.init(rawValue:)) ?? .centroid
+        s.followTrackpad = d.object(forKey: "followTrackpad") as? Bool ?? true
         return s
     }
 
@@ -33,9 +36,15 @@ struct StoredSettings: Sendable {
         d.set(returnFocus, forKey: "returnFocus")
         d.set(threeFingerDrag, forKey: "threeFingerDrag")
         d.set(threeFingerAnchor.rawValue, forKey: "threeFingerAnchor")
+        d.set(followTrackpad, forKey: "followTrackpad")
     }
 
-    func apply(to p: inout PipelineSettings) {
+    func apply(to p: inout PipelineSettings, trackpad: TrackpadPreferences) {
+        apply(to: &p)
+        p.trackpad = followTrackpad ? trackpad : nil
+    }
+
+    private func apply(to p: inout PipelineSettings) {
         p.policy.forced = delivery
         p.policy.gesturesDirect = gesturesDirect
         p.oneFingerDrag = oneFingerScroll ? .scroll : .clickAndDrag

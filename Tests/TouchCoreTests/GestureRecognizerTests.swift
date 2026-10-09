@@ -329,3 +329,27 @@ private func isDragEnded(_ action: GestureAction?, near p: PanelPoint) -> Bool {
     if case let .dragEnded(at) = action { return near(at, p) }
     return false
 }
+
+// MARK: gestures switched off (trackpad settings)
+
+@Test func withPinchOffSpreadingFingersDoesNotZoom() {
+    var s = Script { $0.pinchEnabled = false }
+    s.at(0, began(0, 0.45, 0.5), began(1, 0.55, 0.5))
+    s.at(30, moved(0, 0.43, 0.5), moved(1, 0.57, 0.5))
+    s.at(60, ended(0, 0.43, 0.5), ended(1, 0.57, 0.5))
+    #expect(!s.actions.contains { if case .magnify = $0 { true } else { false } })
+}
+
+@Test func withRotateOffTwistingDoesNotRotate() {
+    var s = Script { $0.rotateEnabled = false }
+    s.at(0, began(0, 0.5 - mmX(20), 0.5), began(1, 0.5 + mmX(20), 0.5))
+    s.at(30, moved(0, 0.5 - mmX(20), 0.5 + mmY(5)), moved(1, 0.5 + mmX(20), 0.5 - mmY(5)))
+    #expect(!s.actions.contains { if case .rotate = $0 { true } else { false } })
+}
+
+@Test func withScrollOffTwoFingersMovingTogetherDoNotScroll() {
+    var s = Script { $0.scrollEnabled = false }
+    s.at(0, began(0, 0.4, 0.4), began(1, 0.5, 0.4))
+    s.at(30, moved(0, 0.4, 0.4 + mmY(10)), moved(1, 0.5, 0.4 + mmY(10)))
+    #expect(s.actions.isEmpty)
+}

@@ -13,6 +13,8 @@ public struct PipelineSettings: Sendable {
     public var oneFingerDrag: OneFingerDragMode = .scroll
     public var threeFingerDrag = true
     public var threeFingerAnchor: ThreeFingerAnchor = .centroid
+    /// When set, the trackpad's settings decide three-finger drag, scroll, pinch, rotate and momentum.
+    public var trackpad: TrackpadPreferences?
     public var displayVendor: UInt32 = 7908
     public var displayModel: UInt32 = 342
 
@@ -55,9 +57,7 @@ public final class InputPipeline: @unchecked Sendable {
             change(&settings)
             deliverer.dryRun = settings.dryRun
             deliverer.focusMode = settings.focus
-            recognizer.oneFingerDrag = settings.oneFingerDrag
-            recognizer.threeFingerDrag = settings.threeFingerDrag
-            recognizer.threeFingerAnchor = settings.threeFingerAnchor
+            applyGestureSettings(to: &recognizer)
             refreshDisplay()
         }
     }
@@ -89,13 +89,24 @@ public final class InputPipeline: @unchecked Sendable {
         }
     }
 
+    private func applyGestureSettings(to recognizer: inout GestureRecognizer) {
+        recognizer.oneFingerDrag = settings.oneFingerDrag
+        recognizer.threeFingerDrag = settings.threeFingerDrag
+        recognizer.threeFingerAnchor = settings.threeFingerAnchor
+        if let trackpad = settings.trackpad {
+            recognizer.apply(trackpad)
+            deliverer.momentumEnabled = trackpad.momentum
+        } else {
+            recognizer.enableAllTwoFingerGestures()
+            deliverer.momentumEnabled = true
+        }
+    }
+
     /// Fresh tracker and recognizer (start, stop, display lost), keeping the current settings.
     private func resetGestureState() {
         tracker = ContactTracker()
         var fresh = GestureRecognizer()
-        fresh.oneFingerDrag = settings.oneFingerDrag
-        fresh.threeFingerDrag = settings.threeFingerDrag
-        fresh.threeFingerAnchor = settings.threeFingerAnchor
+        applyGestureSettings(to: &fresh)
         // In scroll mode a one-finger pan that starts on a toolbar or title bar still moves the window.
         fresh.dragZone = { [weak self] point in self?.startsWindowDrag(point) ?? false }
         recognizer = fresh

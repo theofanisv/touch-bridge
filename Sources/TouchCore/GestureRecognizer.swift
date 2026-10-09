@@ -55,6 +55,10 @@ public struct GestureConfig: Codable, Equatable, Sendable {
     public var threeFingerAnchor: ThreeFingerAnchor = .centroid
     /// The third finger must land within this time of the first.
     public var threeFingerWindowNs: UInt64 = 250_000_000
+    /// Two-finger gestures that are switched on (trackpad settings).
+    public var scrollEnabled = true
+    public var pinchEnabled = true
+    public var rotateEnabled = true
     public var panelWidthMm = 309.3
     public var panelHeightMm = 173.9
     public var tapSlopMm = 3.0
@@ -135,6 +139,15 @@ public struct GestureRecognizer: Sendable {
     public var threeFingerAnchor: ThreeFingerAnchor {
         get { config.threeFingerAnchor }
         set { config.threeFingerAnchor = newValue }
+    }
+    /// Follow the trackpad's gesture switches (three-finger drag, scroll, pinch, rotate).
+    public mutating func apply(_ trackpad: TrackpadPreferences) {
+        trackpad.apply(to: &config)
+    }
+    public mutating func enableAllTwoFingerGestures() {
+        config.scrollEnabled = true
+        config.pinchEnabled = true
+        config.rotateEnabled = true
     }
     private var active: [UInt8: PanelPoint] = [:]
     private var lastTap: (ns: UInt64, at: PanelPoint, count: Int)?
@@ -382,9 +395,9 @@ public struct GestureRecognizer: Sendable {
         let tangential = abs(differential.x * uy - differential.y * ux)
 
         let together = min(ma, mb) >= config.parallelMinMm && (da.x * db.x + da.y * db.y) / (ma * mb) > config.parallelMinCosine
-        if together, hypot(common.x, common.y) > max(radial, tangential) { return .scroll }
-        if radial >= tangential { return radial >= config.pinchMinMm ? .pinch : nil }
-        return tangential >= config.rotateMinMm ? .rotate : nil
+        if together, hypot(common.x, common.y) > max(radial, tangential) { return config.scrollEnabled ? .scroll : nil }
+        if radial >= tangential { return radial >= config.pinchMinMm && config.pinchEnabled ? .pinch : nil }
+        return tangential >= config.rotateMinMm && config.rotateEnabled ? .rotate : nil
     }
 
     /// Velocity over the recent samples, in normalized panel units per second; zero if the finger had stopped.

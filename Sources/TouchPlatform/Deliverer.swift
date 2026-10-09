@@ -51,6 +51,8 @@ final class Deliverer {
 
     var dryRun = false
     var focusMode: FocusMode = .followTouch
+    /// Trackpad setting "momentum scrolling".
+    var momentumEnabled = true
     var log: (String) -> Void = { _ in }
 
     private let queue: DispatchQueue
@@ -212,7 +214,7 @@ final class Deliverer {
         post(EventSynth.scroll(dx: 0, dy: 0, at: location, phase: .ended, momentum: .none, window: window, source: source))
         openPhase = nil
         var momentum = Momentum(velocityX: velocityX, velocityY: velocityY)
-        guard let first = momentum.next() else { end(); return }
+        guard momentumEnabled, let first = momentum.next() else { end(); return }
         post(EventSynth.scroll(dx: first.dx, dy: first.dy, at: location, phase: nil, momentum: .begin, window: window, source: source))
         let timer = DispatchSource.makeTimerSource(queue: queue)
         timer.schedule(deadline: .now() + 1.0 / 120, repeating: 1.0 / 120)

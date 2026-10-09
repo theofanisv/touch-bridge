@@ -21,6 +21,10 @@ final class MenuBarApp: NSObject, NSApplicationDelegate {
     private var threeFingerItem: NSMenuItem!
     private var anchorItems: [NSMenuItem] = []
     private var stored = StoredSettings.load()
+    private var trackpad = TrackpadPreferencesReader.read()
+    private var followTrackpadItem: NSMenuItem!
+    private let trackpadLine = NSMenuItem(title: "Trackpad settings: …", action: nil, keyEquivalent: "")
+    private var trackpadTimer: Timer?
     private var loginItem: NSMenuItem!
     private var modeItems: [NSMenuItem] = []
     private var running = false
@@ -45,7 +49,10 @@ final class MenuBarApp: NSObject, NSApplicationDelegate {
         }
         log.write("started \(Bundle.main.bundlePath)\(LoginItem.isLaunchdInstance ? " as login item" : "")")
         let initial = stored
-        pipeline.update { initial.apply(to: &$0) }
+        let initialTrackpad = trackpad
+        pipeline.update { initial.apply(to: &$0, trackpad: initialTrackpad) }
+        log.write("trackpad settings: \(trackpad.summary)\(stored.followTrackpad ? " (followed)" : " (not followed)")")
+        watchTrackpadSettings()
         log.write("settings: delivery \(initial.delivery?.rawValue ?? "automatic"), one-finger drag \(initial.oneFingerScroll ? "scrolls" : "clicks-and-drags"), three-finger drag \(initial.threeFingerDrag ? "on (\(initial.threeFingerAnchor.rawValue))" : "off"), pinch & rotate direct \(initial.gesturesDirect), return focus \(initial.returnFocus)")
         if CommandLine.arguments.contains("--dry-run") {
             dryRunItem.state = .on
@@ -83,6 +90,7 @@ final class MenuBarApp: NSObject, NSApplicationDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.image = NSImage(systemSymbolName: "hand.point.up.left", accessibilityDescription: "TouchBridge")
         let menu = NSMenu()
+        menu.autoenablesItems = false   // items greyed out while the trackpad settings decide
         for line in [panelLine, displayLine, gestureLine, touchesLine] {
             line.isEnabled = false
             menu.addItem(line)
@@ -105,8 +113,10 @@ final class MenuBarApp: NSObject, NSApplicationDelegate {
         gesturesDirectItem.state = stored.gesturesDirect ? .on : .off
         oneFingerScrollItem = item(menu, "One-Finger Drag Scrolls (hold, then drag to click-and-drag)", #selector(toggleOneFingerScroll))
         oneFingerScrollItem.state = stored.oneFingerScroll ? .on : .off
+        followTrackpadItem = item(menu, "Follow Trackpad Settings", #selector(toggleFollowTrackpad))
+        trackpadLine.isEnabled = false
+        menu.addItem(trackpadLine)
         threeFingerItem = item(menu, "Three-Finger Drag", #selector(toggleThreeFinger))
-        threeFingerItem.state = stored.threeFingerDrag ? .on : .off
         let anchorMenu = NSMenu()
         for (title, anchor) in [("Centre of the Fingers", ThreeFingerAnchor.centroid), ("First Finger to Touch", .firstFinger)] {
             let entry = NSMenuItem(title: title, action: #selector(chooseAnchor(_:)), keyEquivalent: "")
@@ -129,6 +139,49 @@ final class MenuBarApp: NSObject, NSApplicationDelegate {
         menu.addItem(.separator())
         _ = item(menu, "Quit TouchBridge", #selector(quit), key: "q")
         statusItem.menu = menu
+        refreshTrackpadItems()
+    }
+
+    // MARK: trackpad settings
+
+    private func refreshTrackpadItems() {
+        let following = stored.followTrackpad
+        followTrackpadItem.state = following ? .on : .off
+        trackpadLine.title = "    Trackpad: \(trackpad.summary)"
+        trackpadLine.isHidden = !following
+        threeFingerItem.isEnabled = !following
+        threeFingerItem.state = (following ? trackpad.threeFingerDrag : stored.threeFingerDrag) ? .on : .off
+        threeFingerItem.title = following ? "Three-Finger Drag (from Trackpad settings)" : "Three-Finger Drag"
+    }
+
+    /// Re-reads the trackpad settings every few seconds and after wake (cfprefsd writes the plist lazily,
+    /// so watching the file would miss changes).
+    private func watchTrackpadSettings() {
+        trackpadTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { _ in
+            Task { @MainActor [weak self] in self?.reloadTrackpadSettings() }
+        }
+        NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { _ in
+            Task { @MainActor [weak self] in self?.reloadTrackpadSettings() }
+        }
+    }
+
+    private func reloadTrackpadSettings() {
+        let latest = TrackpadPreferencesReader.read()
+        guard latest != trackpad else { return }
+        trackpad = latest
+        log.write("trackpad settings changed: \(latest.summary)")
+        refreshTrackpadItems()
+        guard stored.followTrackpad else { return }
+        pipeline.update { $0.trackpad = latest }
+    }
+
+    @objc private func toggleFollowTrackpad() {
+        stored.followTrackpad.toggle()
+        stored.save()
+        let settings = stored, latest = trackpad
+        pipeline.update { settings.apply(to: &$0, trackpad: latest) }
+        refreshTrackpadItems()
+        log.write("follow trackpad settings: \(stored.followTrackpad ? "on" : "off")")
     }
 
     private func item(_ menu: NSMenu, _ title: String, _ action: Selector, key: String = "") -> NSMenuItem {

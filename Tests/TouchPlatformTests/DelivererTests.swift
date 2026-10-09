@@ -123,3 +123,17 @@ private func make() -> (Deliverer, FakeEffects, DispatchQueue) {
     #expect(fx.posted.isEmpty)
     #expect(fx.hidden == false)
 }
+
+// Trackpad setting "momentum scrolling" off: a flick ends without momentum.
+@Test func withMomentumOffAFlickEndsWithoutMomentum() {
+    let (d, fx, queue) = make()
+    queue.sync {
+        d.momentumEnabled = false
+        d.begin(direct, at: arzopaPoint, appPID: 42, activate: false)
+        d.scroll(dx: 0, dy: 10, phase: .began)
+        d.scrollEnded(velocityX: 0, velocityY: 3000)
+    }
+    Thread.sleep(forTimeInterval: 0.05)
+    #expect(queue.sync { fx.posted.allSatisfy { $0.momentumPhase == 0 } })
+    #expect(fx.posted.last?.scrollPhase == 4)
+}
