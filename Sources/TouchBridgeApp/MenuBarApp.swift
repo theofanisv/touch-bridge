@@ -18,6 +18,9 @@ final class MenuBarApp: NSObject, NSApplicationDelegate {
     private var gesturesDirectItem: NSMenuItem!
     private var returnFocusItem: NSMenuItem!
     private var oneFingerScrollItem: NSMenuItem!
+    private var threeFingerItem: NSMenuItem!
+    private var anchorItems: [NSMenuItem] = []
+    private var stored = StoredSettings.load()
     private var loginItem: NSMenuItem!
     private var modeItems: [NSMenuItem] = []
     private var running = false
@@ -41,6 +44,9 @@ final class MenuBarApp: NSObject, NSApplicationDelegate {
             Task { @MainActor [weak self] in self?.show(message) }
         }
         log.write("started \(Bundle.main.bundlePath)\(LoginItem.isLaunchdInstance ? " as login item" : "")")
+        let initial = stored
+        pipeline.update { initial.apply(to: &$0) }
+        log.write("settings: delivery \(initial.delivery?.rawValue ?? "automatic"), one-finger drag \(initial.oneFingerScroll ? "scrolls" : "clicks-and-drags"), three-finger drag \(initial.threeFingerDrag ? "on (\(initial.threeFingerAnchor.rawValue))" : "off"), pinch & rotate direct \(initial.gesturesDirect), return focus \(initial.returnFocus)")
         if CommandLine.arguments.contains("--dry-run") {
             dryRunItem.state = .on
             pipeline.update { $0.dryRun = true }
@@ -88,7 +94,7 @@ final class MenuBarApp: NSObject, NSApplicationDelegate {
             let entry = NSMenuItem(title: title, action: #selector(chooseMode(_:)), keyEquivalent: "")
             entry.target = self
             entry.tag = tag
-            entry.state = tag == 0 ? .on : .off
+            entry.state = [0: nil, 1: .direct, 2: .warp][tag] == stored.delivery ? .on : .off
             modeItems.append(entry)
             modeMenu.addItem(entry)
         }
@@ -96,10 +102,25 @@ final class MenuBarApp: NSObject, NSApplicationDelegate {
         modeParent.submenu = modeMenu
         menu.addItem(modeParent)
         gesturesDirectItem = item(menu, "Pinch & Rotate Direct", #selector(toggleGesturesDirect))
-        gesturesDirectItem.state = .on
+        gesturesDirectItem.state = stored.gesturesDirect ? .on : .off
         oneFingerScrollItem = item(menu, "One-Finger Drag Scrolls (hold, then drag to click-and-drag)", #selector(toggleOneFingerScroll))
-        oneFingerScrollItem.state = .on
+        oneFingerScrollItem.state = stored.oneFingerScroll ? .on : .off
+        threeFingerItem = item(menu, "Three-Finger Drag", #selector(toggleThreeFinger))
+        threeFingerItem.state = stored.threeFingerDrag ? .on : .off
+        let anchorMenu = NSMenu()
+        for (title, anchor) in [("Centre of the Fingers", ThreeFingerAnchor.centroid), ("First Finger to Touch", .firstFinger)] {
+            let entry = NSMenuItem(title: title, action: #selector(chooseAnchor(_:)), keyEquivalent: "")
+            entry.target = self
+            entry.representedObject = anchor.rawValue
+            entry.state = anchor == stored.threeFingerAnchor ? .on : .off
+            anchorItems.append(entry)
+            anchorMenu.addItem(entry)
+        }
+        let anchorParent = NSMenuItem(title: "Three-Finger Drag Point", action: nil, keyEquivalent: "")
+        anchorParent.submenu = anchorMenu
+        menu.addItem(anchorParent)
         returnFocusItem = item(menu, "Return Focus to Previous App", #selector(toggleReturnFocus))
+        returnFocusItem.state = stored.returnFocus ? .on : .off
         dryRunItem = item(menu, "Dry Run (log only)", #selector(toggleDryRun))
         menu.addItem(.separator())
         loginItem = item(menu, "Start at Login", #selector(toggleLoginItem))
@@ -146,6 +167,8 @@ final class MenuBarApp: NSObject, NSApplicationDelegate {
     @objc private func chooseMode(_ sender: NSMenuItem) {
         let forced: DeliveryMode? = [0: nil, 1: .direct, 2: .warp][sender.tag] ?? nil
         modeItems.forEach { $0.state = $0 == sender ? .on : .off }
+        stored.delivery = forced
+        stored.save()
         pipeline.update { $0.policy.forced = forced }
         log.write("delivery mode: \(forced.map(\.rawValue) ?? "automatic")")
     }
@@ -153,12 +176,16 @@ final class MenuBarApp: NSObject, NSApplicationDelegate {
     @objc private func toggleGesturesDirect() {
         let on = gesturesDirectItem.state != .on
         gesturesDirectItem.state = on ? .on : .off
+        stored.gesturesDirect = on
+        stored.save()
         pipeline.update { $0.policy.gesturesDirect = on }
     }
 
     @objc private func toggleOneFingerScroll() {
         let on = oneFingerScrollItem.state != .on
         oneFingerScrollItem.state = on ? .on : .off
+        stored.oneFingerScroll = on
+        stored.save()
         pipeline.update { $0.oneFingerDrag = on ? .scroll : .clickAndDrag }
         log.write("one-finger drag: \(on ? "scroll" : "click-and-drag")")
     }
@@ -166,8 +193,28 @@ final class MenuBarApp: NSObject, NSApplicationDelegate {
     @objc private func toggleReturnFocus() {
         let on = returnFocusItem.state != .on
         returnFocusItem.state = on ? .on : .off
+        stored.returnFocus = on
+        stored.save()
         pipeline.update { $0.focus = on ? .returnToPrevious : .followTouch }
         log.write("focus: \(on ? "return to previous app" : "follow touch")")
+    }
+
+    @objc private func toggleThreeFinger() {
+        let on = threeFingerItem.state != .on
+        threeFingerItem.state = on ? .on : .off
+        stored.threeFingerDrag = on
+        stored.save()
+        pipeline.update { $0.threeFingerDrag = on }
+        log.write("three-finger drag: \(on ? "on" : "off")")
+    }
+
+    @objc private func chooseAnchor(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let anchor = ThreeFingerAnchor(rawValue: raw) else { return }
+        anchorItems.forEach { $0.state = $0 == sender ? .on : .off }
+        stored.threeFingerAnchor = anchor
+        stored.save()
+        pipeline.update { $0.threeFingerAnchor = anchor }
+        log.write("three-finger drag point: \(anchor.rawValue)")
     }
 
     // MARK: login item

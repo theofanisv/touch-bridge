@@ -11,6 +11,8 @@ public struct PipelineSettings: Sendable {
     /// The touch display's EDID identity (defaults: the ARZOPA on this Mac).
     public var focus: FocusMode = .followTouch
     public var oneFingerDrag: OneFingerDragMode = .scroll
+    public var threeFingerDrag = true
+    public var threeFingerAnchor: ThreeFingerAnchor = .centroid
     public var displayVendor: UInt32 = 7908
     public var displayModel: UInt32 = 342
 
@@ -54,6 +56,8 @@ public final class InputPipeline: @unchecked Sendable {
             deliverer.dryRun = settings.dryRun
             deliverer.focusMode = settings.focus
             recognizer.oneFingerDrag = settings.oneFingerDrag
+            recognizer.threeFingerDrag = settings.threeFingerDrag
+            recognizer.threeFingerAnchor = settings.threeFingerAnchor
             refreshDisplay()
         }
     }
@@ -90,6 +94,8 @@ public final class InputPipeline: @unchecked Sendable {
         tracker = ContactTracker()
         var fresh = GestureRecognizer()
         fresh.oneFingerDrag = settings.oneFingerDrag
+        fresh.threeFingerDrag = settings.threeFingerDrag
+        fresh.threeFingerAnchor = settings.threeFingerAnchor
         // In scroll mode a one-finger pan that starts on a toolbar or title bar still moves the window.
         fresh.dragZone = { [weak self] point in self?.startsWindowDrag(point) ?? false }
         recognizer = fresh

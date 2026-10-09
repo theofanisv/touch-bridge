@@ -44,7 +44,18 @@ Mirror the owner's trackpad preferences and watch them for changes, so the touch
 - **Delivery:** dock-swipe pinch events (Mac Mouse Fix uses type constant 4.2e-45 for pinch), or `open -a Launchpad`, or the Show Desktop shortcut (F11).
 - **Note:** macOS 26 replaces Launchpad with the Apps view, so check the target version.
 
-## 4. Three-finger drag for click-and-drag
+## 0. Three-finger drag: grab precision (revisit at the end)
+
+Shipped in v0.3.0: three fingers moving together = click-and-drag, grabbing at the centre of the fingers or, by menu setting, under the first finger.
+
+- **Owner feedback (2026-10-10):** "generally good but not perfect. The problem is mainly at the start: how to select the element that I want to drag."
+- **Ideas:**
+  - Show a small marker at the grab point while three fingers are down, so you can see what will be grabbed before moving.
+  - Snap the grab to the draggable element nearest the fingers (Accessibility: text, file, title bar), instead of a geometric point.
+  - Two-step: the first finger rests on the item, which fixes the grab point precisely; the next two fingers start the drag.
+  - Grab under the finger that has moved least (the "anchor" finger) rather than the first or the centre.
+
+## 4. Three-finger drag for click-and-drag (done in v0.3.0, see 0)
 
 This would make click-and-drag available with one-finger scroll on and no hold needed: three fingers move = left-button drag, like the trackpad setting.
 

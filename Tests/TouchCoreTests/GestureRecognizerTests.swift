@@ -15,9 +15,10 @@ private func ended(_ id: UInt8, _ x: Double, _ y: Double) -> ContactEvent { Cont
 private struct Script {
     var recognizer: GestureRecognizer
     var actions: [GestureAction] = []
-    init(oneFingerDrag: OneFingerDragMode = .clickAndDrag) {
+    init(oneFingerDrag: OneFingerDragMode = .clickAndDrag, configure: (inout GestureConfig) -> Void = { _ in }) {
         var c = config
         c.oneFingerDrag = oneFingerDrag
+        configure(&c)
         recognizer = GestureRecognizer(config: c)
     }
     mutating func at(_ t: UInt64, _ events: ContactEvent...) {
@@ -241,4 +242,90 @@ private struct Script {
 
 @Test func scrollModeIsTheDefault() {
     #expect(GestureConfig().oneFingerDrag == .scroll)
+}
+
+
+// MARK: three-finger drag (like the trackpad setting)
+
+@Test func threeFingersMovingTogetherDragFromTheirCentre() {
+    var s = Script()
+    s.at(0, began(0, 0.4, 0.5))
+    s.at(30, began(1, 0.5, 0.5))
+    s.at(60, began(2, 0.6, 0.5))
+    s.at(100, moved(0, 0.4, 0.5 + mmY(6)), moved(1, 0.5, 0.5 + mmY(6)), moved(2, 0.6, 0.5 + mmY(6)))
+    #expect(s.actions.count == 2)
+    #expect(isDragBegan(s.actions.first, near: PanelPoint(x: 0.5, y: 0.5), hold: true))
+    #expect(isDragMoved(s.actions.last, near: PanelPoint(x: 0.5, y: 0.5 + mmY(6))))
+    s.at(150, ended(1, 0.5, 0.5 + mmY(6)))
+    #expect(isDragEnded(s.actions.last, near: PanelPoint(x: 0.5, y: 0.5 + mmY(6))), "the drag ends when the fingers lift")
+    let count = s.actions.count
+    s.at(170, ended(0, 0.4, 0.5 + mmY(6)), ended(2, 0.6, 0.5 + mmY(6)))
+    #expect(s.actions.count == count)
+}
+
+@Test func theThreeFingerDragPointCanBeTheFirstFinger() {
+    var s = Script { $0.threeFingerAnchor = .firstFinger }
+    s.at(0, began(0, 0.4, 0.5))
+    s.at(30, began(1, 0.5, 0.5))
+    s.at(60, began(2, 0.6, 0.5))
+    s.at(100, moved(0, 0.4, 0.5 + mmY(6)), moved(1, 0.5, 0.5 + mmY(6)), moved(2, 0.6, 0.5 + mmY(6)))
+    #expect(s.actions.count == 2)
+    #expect(isDragBegan(s.actions.first, near: PanelPoint(x: 0.4, y: 0.5), hold: true))
+    #expect(isDragMoved(s.actions.last, near: PanelPoint(x: 0.4, y: 0.5 + mmY(6))))
+}
+
+@Test func threeFingersThatDoNotMoveDoNothing() {
+    var s = Script()
+    s.at(0, began(0, 0.4, 0.5), began(1, 0.5, 0.5), began(2, 0.6, 0.5))
+    s.at(120, ended(0, 0.4, 0.5), ended(1, 0.5, 0.5), ended(2, 0.6, 0.5))
+    #expect(s.actions.isEmpty)
+}
+
+@Test func aThirdFingerDuringATwoFingerScrollIsStillIgnored() {
+    var s = Script()
+    s.at(0, began(0, 0.4, 0.4), began(1, 0.5, 0.4))
+    s.at(30, moved(0, 0.4, 0.4 + mmY(6)), moved(1, 0.5, 0.4 + mmY(6)))   // scroll locks
+    s.at(60, began(2, 0.6, 0.4 + mmY(6)))
+    s.at(80, moved(0, 0.4, 0.4 + mmY(9)), moved(1, 0.5, 0.4 + mmY(9)), moved(2, 0.6, 0.4 + mmY(9)))
+    #expect(!s.actions.contains { if case .dragBegan = $0 { true } else { false } })
+    guard case .scroll(_, _, .changed) = s.actions.last else { Issue.record("scroll should continue, got \(s.actions)"); return }
+}
+
+@Test func aThirdFingerArrivingLateLeavesTheTwoFingerGesture() {
+    var s = Script()
+    s.at(0, began(0, 0.4, 0.4))
+    s.at(30, began(1, 0.5, 0.4))
+    s.at(400, began(2, 0.6, 0.4))
+    s.at(440, moved(0, 0.4, 0.4 + mmY(6)), moved(1, 0.5, 0.4 + mmY(6)), moved(2, 0.6, 0.4 + mmY(6)))
+    guard case .scroll(_, _, .began) = s.actions.first else { Issue.record("expected the two-finger scroll, got \(s.actions)"); return }
+}
+
+@Test func withThreeFingerDragOffThreeFingersBehaveAsBefore() {
+    var s = Script { $0.threeFingerDrag = false }
+    s.at(0, began(0, 0.4, 0.4), began(1, 0.5, 0.4), began(2, 0.6, 0.4))
+    s.at(40, moved(0, 0.4, 0.4 + mmY(6)), moved(1, 0.5, 0.4 + mmY(6)), moved(2, 0.6, 0.4 + mmY(6)))
+    guard case .scroll(_, _, .began) = s.actions.first else { Issue.record("expected the two-finger scroll, got \(s.actions)"); return }
+}
+
+@Test func aPalmDuringAThreeFingerDragEndsIt() {
+    var s = Script()
+    s.at(0, began(0, 0.4, 0.5), began(1, 0.5, 0.5), began(2, 0.6, 0.5))
+    s.at(40, moved(0, 0.4, 0.5 + mmY(6)), moved(1, 0.5, 0.5 + mmY(6)), moved(2, 0.6, 0.5 + mmY(6)))
+    s.at(60, began(3, 0.7, 0.7))
+    #expect(isDragEnded(s.actions.last, near: PanelPoint(x: 0.5, y: 0.5 + mmY(6))))
+}
+
+// Centroids of three coordinates can differ from the exact value in the last binary digit.
+private func near(_ a: PanelPoint, _ b: PanelPoint) -> Bool { abs(a.x - b.x) < 1e-9 && abs(a.y - b.y) < 1e-9 }
+private func isDragBegan(_ action: GestureAction?, near p: PanelPoint, hold: Bool) -> Bool {
+    if case let .dragBegan(at, h) = action { return h == hold && near(at, p) }
+    return false
+}
+private func isDragMoved(_ action: GestureAction?, near p: PanelPoint) -> Bool {
+    if case let .dragMoved(to) = action { return near(to, p) }
+    return false
+}
+private func isDragEnded(_ action: GestureAction?, near p: PanelPoint) -> Bool {
+    if case let .dragEnded(at) = action { return near(at, p) }
+    return false
 }
