@@ -6,13 +6,20 @@ It takes exclusive control of the panel and sends each touch to the ARZOPA displ
 
 Design and decisions are in `docs/spec.md` (the approved plan, plus implementation notes). Future work is in `docs/backlog.md`.
 
-## Build and run
+## Build, install and run
 
 ```bash
-./scripts/bundle.sh                 # swift build + build/TouchBridge.app, signed with "TouchBridge Dev"
-open -n build/TouchBridge.app       # menu-bar agent (✋ icon)
-swift test                          # TouchCore unit tests + replays of real panel recordings
+./scripts/install.sh                # build + install to ~/Applications/TouchBridge.app (the daily copy) + (re)start it
+./scripts/bundle.sh                 # build only: build/TouchBridge.app, signed with "TouchBridge Dev" (for development)
+swift test                          # unit tests, deliverer tests, replays of real panel recordings
 ```
+
+- **The installed copy runs as a login item** (menu: Start at Login): a per-user launch agent, `~/Library/LaunchAgents/com.theofanis.touchbridge.agent.plist`, that runs `~/Applications/TouchBridge.app/Contents/MacOS/TouchBridge`.
+  - It starts at login and is restarted within seconds after a crash.
+  - Quit from the menu stays quit until the next login.
+  - Start it again with `launchctl kickstart gui/$(id -u)/com.theofanis.touchbridge.agent`, or by opening the app.
+  - It isn't an `SMAppService` login item: that API pins the exact build it registered, so every rebuild of this self-signed app broke it.
+- **Rebuilding in the project folder** never touches the installed copy. Run `scripts/install.sh` to update it.
 
 The app needs **Accessibility** permission (System Settings → Privacy & Security). The stable self-signed certificate keeps that permission across rebuilds.
 
@@ -29,6 +36,8 @@ The app needs **Accessibility** permission (System Settings → Privacy & Securi
 | Two fingers apart/together | Pinch to zoom |
 | Two fingers around each other | Rotate |
 | More than 3 fingers | Ignored (palm). All 10 fingers are still tracked; see "Touches" in the menu |
+
+After a power cycle (unplug, sleep) the panel starts in a single-touch "mouse" mode. TouchBridge switches it back to multitouch when it connects, and again if mouse-mode reports ever arrive. Both steps are logged.
 
 ## Delivery
 

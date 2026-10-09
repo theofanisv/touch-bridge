@@ -83,6 +83,21 @@ public final class HIDTouchSource: @unchecked Sendable {
         }
     }
 
+    /// Reads feature reports 2 (contact-count maximum) and 6 (vendor blob) from every seized panel.
+    /// Linux's hid-multitouch reads the blob "to enable some devices": after a power cycle this panel
+    /// sends single-touch mouse reports until it is read. Call on `queue` (from a report callback).
+    public func requestMultitouchMode() {
+        dispatchPrecondition(condition: .onQueue(queue))
+        for device in devices {
+            for (id, length) in [(2, 2), (6, 257)] {
+                var bytes = [UInt8](repeating: 0, count: length)
+                var size = CFIndex(length)
+                let result = IOHIDDeviceGetReport(device, kIOHIDReportTypeFeature, CFIndex(id), &bytes, &size)
+                onStatus?("feature report \(id): \(result == kIOReturnSuccess ? "\(size) bytes read" : Self.describe(result))")
+            }
+        }
+    }
+
     private func attach(_ device: IOHIDDevice) {
         matchedAny = true
         let result = IOHIDDeviceOpen(device, IOOptionBits(kIOHIDOptionsTypeSeizeDevice))
@@ -106,6 +121,8 @@ public final class HIDTouchSource: @unchecked Sendable {
         IOHIDDeviceActivate(device)
         devices.append(device)
         onStatus?("panel seized")
+        // After a power cycle (unplug, sleep) the panel starts in single-touch mouse mode.
+        requestMultitouchMode()
     }
 
     private func detach(_ device: IOHIDDevice) {

@@ -14,6 +14,8 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp .build/release/TouchBridgeApp "$APP/Contents/MacOS/TouchBridge"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
+mkdir -p "$APP/Contents/Library/LaunchAgents"
+cp Resources/com.theofanis.touchbridge.plist "$APP/Contents/Library/LaunchAgents/"
 
 if security find-identity -p codesigning | grep -qF "\"$IDENTITY\""; then
     codesign --force --sign "$IDENTITY" "$APP"

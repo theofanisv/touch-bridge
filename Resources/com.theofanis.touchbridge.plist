@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Login item registered by the app with SMAppService.agent (menu: Start at Login). -->
+    <key>Label</key>
+    <string>com.theofanis.touchbridge</string>
+    <key>BundleProgram</key>
+    <string>Contents/MacOS/TouchBridge</string>
+    <key>AssociatedBundleIdentifiers</key>
+    <array>
+        <string>com.theofanis.touchbridge</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <!-- Restart after a crash; a normal Quit (exit 0) stays quit until the next login. -->
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+    <key>LimitLoadToSessionType</key>
+    <array>
+        <string>Aqua</string>
+    </array>
+    <!-- Touch input is latency-sensitive. -->
+    <key>ProcessType</key>
+    <string>Interactive</string>
+</dict>
+</plist>

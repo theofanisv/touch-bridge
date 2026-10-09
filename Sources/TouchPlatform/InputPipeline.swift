@@ -42,6 +42,7 @@ public final class InputPipeline: @unchecked Sendable {
     private var gestureStart: CGPoint?
     private var touchCount = 0
     private var maxTouchCount = 0
+    private var panelMode = PanelModeWatch()
     /// The window-drag answer for the gesture being classified, so Accessibility is asked once.
     private var windowDragMemo: (point: CGPoint, result: Bool)?
 
@@ -105,6 +106,15 @@ public final class InputPipeline: @unchecked Sendable {
     private func handle(report bytes: [UInt8], timestamp: UInt64) {
         guard let frame = ReportParser.parse(bytes) else { return }
         let now = Self.nanoseconds(timestamp)
+        switch panelMode.observe(frame.source, atNs: now) {
+        case .requestMultitouch:
+            status("panel is sending single-touch (mouse) reports; asking it for multitouch")
+            source.requestMultitouchMode()
+        case .multitouchRestored:
+            status("panel sends multitouch reports again")
+        case nil:
+            break
+        }
         process(tracker.update(frame, atNs: now), now: now)
     }
 

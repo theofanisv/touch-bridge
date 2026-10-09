@@ -18,6 +18,7 @@ final class MenuBarApp: NSObject, NSApplicationDelegate {
     private var gesturesDirectItem: NSMenuItem!
     private var returnFocusItem: NSMenuItem!
     private var oneFingerScrollItem: NSMenuItem!
+    private var loginItem: NSMenuItem!
     private var modeItems: [NSMenuItem] = []
     private var running = false
     private var permissionTimer: Timer?
@@ -31,17 +32,24 @@ final class MenuBarApp: NSObject, NSApplicationDelegate {
         }
         buildMenu()
         installSignalHandlers()
-        if CommandLine.arguments.contains("--dry-run") {
-            dryRunItem.state = .on
-            pipeline.update { $0.dryRun = true }
-            log.write("started in dry run (log only)")
-        }
+        // Hooks first: anything queued below may already report status.
         pipeline.onTouchCount = { now, most in
             Task { @MainActor [weak self] in self?.touchesLine.title = "Touches: \(now) now · \(most) max (tracks up to 10)" }
         }
         pipeline.onStatus = { [log] message in
             log.write(message)
             Task { @MainActor [weak self] in self?.show(message) }
+        }
+        log.write("started \(Bundle.main.bundlePath)\(LoginItem.isLaunchdInstance ? " as login item" : "")")
+        if CommandLine.arguments.contains("--dry-run") {
+            dryRunItem.state = .on
+            pipeline.update { $0.dryRun = true }
+            log.write("started in dry run (log only)")
+        }
+        if LoginItem.removeLegacyRegistration() { log.write("removed the old SMAppService login item") }
+        refreshLoginItem()
+        if CommandLine.arguments.contains("--enable-login-item"), !LoginItem.isLaunchdInstance {
+            if enableLoginItem() { return }
         }
         // "AXTrustedCheckOptionPrompt" is the value of kAXTrustedCheckOptionPrompt.
         if AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary) {
@@ -94,6 +102,7 @@ final class MenuBarApp: NSObject, NSApplicationDelegate {
         returnFocusItem = item(menu, "Return Focus to Previous App", #selector(toggleReturnFocus))
         dryRunItem = item(menu, "Dry Run (log only)", #selector(toggleDryRun))
         menu.addItem(.separator())
+        loginItem = item(menu, "Start at Login", #selector(toggleLoginItem))
         _ = item(menu, "Open Event Sink", #selector(openEventSink))
         _ = item(menu, "Open Logs Folder", #selector(openLogs))
         menu.addItem(.separator())
@@ -161,6 +170,59 @@ final class MenuBarApp: NSObject, NSApplicationDelegate {
         log.write("focus: \(on ? "return to previous app" : "follow touch")")
     }
 
+    // MARK: login item
+
+    private func refreshLoginItem() {
+        loginItem.state = LoginItem.isEnabled ? .on : .off
+        loginItem.title = "Start at Login (restarts after a crash)"
+    }
+
+    @objc private func toggleLoginItem() {
+        if LoginItem.isEnabled { disableLoginItem() } else { _ = enableLoginItem() }
+    }
+
+    /// Registers the launchd agent and, unless launchd already runs this process, hands the panel over
+    /// to it so a crash will be restarted. Returns true when this process is about to quit for the hand-over.
+    private func enableLoginItem() -> Bool {
+        do {
+            try LoginItem.enable()
+        } catch {
+            log.write("login item: \(error.localizedDescription)")
+            refreshLoginItem()
+            return false
+        }
+        refreshLoginItem()
+        log.write("login item: \(LoginItem.describe()) (\(LoginItem.plistURL.path))")
+        guard !LoginItem.isLaunchdInstance else { return false }
+        log.write("handing over to the login item")
+        if running { pipeline.stop(); running = false }
+        SingleInstance.release()
+        LoginItem.handOverToLaunchd()
+        NSApp.terminate(nil)
+        return true
+    }
+
+    /// Unregistering stops the launchd job, so a login-item instance first starts a normal copy of itself.
+    private func disableLoginItem() {
+        guard LoginItem.isLaunchdInstance else {
+            LoginItem.disable()
+            refreshLoginItem()
+            log.write("login item: \(LoginItem.describe())")
+            return
+        }
+        log.write("login item off; continuing as a normal app")
+        if running { pipeline.stop(); running = false }
+        SingleInstance.release()
+        let config = NSWorkspace.OpenConfiguration()
+        config.createsNewApplicationInstance = true
+        NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: config) { _, _ in
+            Task { @MainActor in
+                LoginItem.disable()   // unloading the agent ends this process
+                NSApp.terminate(nil)
+            }
+        }
+    }
+
     @objc private func toggleDryRun() {
         let on = dryRunItem.state != .on
         dryRunItem.state = on ? .on : .off
@@ -185,6 +247,11 @@ final class MenuBarApp: NSObject, NSApplicationDelegate {
     private func relaunch() {
         permissionTimer?.invalidate()
         log.write("Accessibility granted; relaunching")
+        if LoginItem.isLaunchdInstance {
+            // A failure exit makes launchd start a fresh process (which sees the new permission).
+            SingleInstance.release()
+            exit(1)
+        }
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/bin/sh")
         task.arguments = ["-c", "sleep 1; /usr/bin/open -n \"\(Bundle.main.bundlePath)\""]
