@@ -4,3 +4,5 @@ build/
 *.app
 .DS_Store
 probe-*.jsonl
+# …except the recording the replay tests use.
+!Tests/TouchCoreTests/Fixtures/probe-*.jsonl
