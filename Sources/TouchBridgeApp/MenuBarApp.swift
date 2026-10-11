@@ -18,6 +18,7 @@ final class MenuBarApp: NSObject, NSApplicationDelegate {
     private var gesturesDirectItem: NSMenuItem!
     private var returnFocusItem: NSMenuItem!
     private var keepFocusItem: NSMenuItem!
+    private var swipePagesItem: NSMenuItem!
     private var oneFingerScrollItem: NSMenuItem!
     private var threeFingerItem: NSMenuItem!
     private var anchorItems: [NSMenuItem] = []
@@ -55,7 +56,7 @@ final class MenuBarApp: NSObject, NSApplicationDelegate {
         pipeline.update { initial.apply(to: &$0, trackpad: initialTrackpad) }
         log.write("trackpad settings: \(trackpad.summary)\(stored.followTrackpad ? " (followed)" : " (not followed)")")
         watchTrackpadSettings()
-        log.write("settings: delivery \(initial.delivery?.rawValue ?? "automatic"), one-finger drag \(initial.oneFingerScroll ? "scrolls" : "clicks-and-drags"), three-finger drag \(initial.threeFingerDrag ? "on (\(initial.threeFingerAnchor.rawValue))" : "off"), pinch & rotate direct \(initial.gesturesDirect), return focus \(initial.returnFocus), launchpad \(initial.launchpadDock.rawValue), keep focus on space switch \(initial.keepFocusOnSpaceSwitch)")
+        log.write("settings: delivery \(initial.delivery?.rawValue ?? "automatic"), one-finger drag \(initial.oneFingerScroll ? "scrolls" : "clicks-and-drags"), three-finger drag \(initial.threeFingerDrag ? "on (\(initial.threeFingerAnchor.rawValue))" : "off"), pinch & rotate direct \(initial.gesturesDirect), return focus \(initial.returnFocus), launchpad \(initial.launchpadDock.rawValue), keep focus on space switch \(initial.keepFocusOnSpaceSwitch), swipe between pages \(initial.swipeBetweenPages)")
         if CommandLine.arguments.contains("--dry-run") {
             dryRunItem.state = .on
             pipeline.update { $0.dryRun = true }
@@ -115,6 +116,8 @@ final class MenuBarApp: NSObject, NSApplicationDelegate {
         gesturesDirectItem.state = stored.gesturesDirect ? .on : .off
         oneFingerScrollItem = item(menu, "One-Finger Drag Scrolls (hold, then drag to click-and-drag)", #selector(toggleOneFingerScroll))
         oneFingerScrollItem.state = stored.oneFingerScroll ? .on : .off
+        swipePagesItem = item(menu, "Swipe Between Pages (Two Fingers)", #selector(toggleSwipePages))
+        swipePagesItem.state = stored.swipeBetweenPages ? .on : .off
         followTrackpadItem = item(menu, "Follow Trackpad Settings", #selector(toggleFollowTrackpad))
         trackpadLine.isEnabled = false
         menu.addItem(trackpadLine)
@@ -269,6 +272,15 @@ final class MenuBarApp: NSObject, NSApplicationDelegate {
         stored.save()
         pipeline.update { $0.focus = on ? .returnToPrevious : .followTouch }
         log.write("focus: \(on ? "return to previous app" : "follow touch")")
+    }
+
+    @objc private func toggleSwipePages() {
+        let on = swipePagesItem.state != .on
+        swipePagesItem.state = on ? .on : .off
+        stored.swipeBetweenPages = on
+        stored.save()
+        pipeline.update { $0.swipeBetweenPages = on }
+        log.write("swipe between pages: \(on ? "on" : "off")")
     }
 
     @objc private func toggleKeepFocus() {

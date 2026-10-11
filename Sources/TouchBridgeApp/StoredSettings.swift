@@ -17,6 +17,8 @@ struct StoredSettings: Sendable {
     var launchpadDock: LaunchpadDockMode = .bringDockAndReturn
     /// A Space switch by touch gives focus back to the app on the other display.
     var keepFocusOnSpaceSwitch = true
+    /// Two-finger scrolls drive trackpad page swipes (Safari back/forward).
+    var swipeBetweenPages = true
 
     private static var defaults: UserDefaults { .standard }
 
@@ -31,6 +33,7 @@ struct StoredSettings: Sendable {
         s.followTrackpad = d.object(forKey: "followTrackpad") as? Bool ?? true
         s.launchpadDock = d.string(forKey: "launchpadDock").flatMap(LaunchpadDockMode.init(rawValue:)) ?? .bringDockAndReturn
         s.keepFocusOnSpaceSwitch = d.object(forKey: "keepFocusOnSpaceSwitch") as? Bool ?? true
+        s.swipeBetweenPages = d.object(forKey: "swipeBetweenPages") as? Bool ?? true
         return s
     }
 
@@ -45,6 +48,7 @@ struct StoredSettings: Sendable {
         d.set(followTrackpad, forKey: "followTrackpad")
         d.set(launchpadDock.rawValue, forKey: "launchpadDock")
         d.set(keepFocusOnSpaceSwitch, forKey: "keepFocusOnSpaceSwitch")
+        d.set(swipeBetweenPages, forKey: "swipeBetweenPages")
     }
 
     func apply(to p: inout PipelineSettings, trackpad: TrackpadPreferences) {
@@ -61,6 +65,7 @@ struct StoredSettings: Sendable {
         p.threeFingerAnchor = threeFingerAnchor
         p.launchpadDock = launchpadDock
         p.keepFocusOnSpaceSwitch = keepFocusOnSpaceSwitch
+        p.swipeBetweenPages = swipeBetweenPages
     }
 
     /// The trackpad's "Three-finger drag" setting (System Settings → Accessibility → Pointer Control),

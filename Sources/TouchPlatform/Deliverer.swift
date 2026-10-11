@@ -53,6 +53,9 @@ final class Deliverer {
     var focusMode: FocusMode = .followTouch
     /// Trackpad setting "momentum scrolling".
     var momentumEnabled = true
+    /// Scrolls carry the trackpad's gesture stream (type 29: subtype 61, 6 per move, 62), from which macOS's
+    /// swipe tracking measures progress: Safari's back/forward page swipe follows the fingers. Set per gesture.
+    var scrollGestureStream = false
     var log: (String) -> Void = { _ in }
 
     private let queue: DispatchQueue
@@ -199,7 +202,9 @@ final class Deliverer {
         stopMomentum()
         if let phase = openPhase {
             switch phase {
-            case .scroll: post(EventSynth.scroll(dx: 0, dy: 0, at: location, phase: .ended, momentum: .none, window: window, source: source))
+            case .scroll:
+                post(EventSynth.scroll(dx: 0, dy: 0, at: location, phase: .ended, momentum: .none, window: window, source: source))
+                endScrollGesture()
             case .magnify: post(EventSynth.magnify(0, at: location, phase: .ended, window: window, source: source))
             case .rotate: post(EventSynth.rotate(0, at: location, phase: .ended, window: window, source: source))
             }
@@ -220,12 +225,30 @@ final class Deliverer {
     func scroll(dx: Double, dy: Double, phase: GesturePhase) {
         post(EventSynth.scroll(dx: dx, dy: dy, at: location, phase: synthPhase(phase), momentum: .none, window: window, source: source))
         openPhase = phase == .ended ? nil : .scroll
+        guard scrollGestureStream else { return }
+        switch phase {
+        case .began: postScrollGesture(.begin)
+        case .changed: postScrollGesture(.move(dx: dx, dy: dy, phase: .changed))
+        case .ended: endScrollGesture()
+        }
+    }
+
+    private func postScrollGesture(_ part: EventSynth.ScrollGesture) {
+        post(EventSynth.scrollGesture(part, at: location, window: window, source: source))
+    }
+
+    /// Closes the gesture stream after the scroll's `ended` event, as the trackpad does.
+    private func endScrollGesture() {
+        guard scrollGestureStream else { return }
+        postScrollGesture(.move(dx: 0, dy: 0, phase: .ended))
+        postScrollGesture(.end)
     }
 
     /// Ends the finger phase, then plays momentum (points per second) and finishes the gesture.
     func scrollEnded(velocityX: Double, velocityY: Double) {
         post(EventSynth.scroll(dx: 0, dy: 0, at: location, phase: .ended, momentum: .none, window: window, source: source))
         openPhase = nil
+        endScrollGesture()
         var momentum = Momentum(velocityX: velocityX, velocityY: velocityY)
         guard momentumEnabled, let first = momentum.next() else { end(); return }
         post(EventSynth.scroll(dx: first.dx, dy: first.dy, at: location, phase: nil, momentum: .begin, window: window, source: source))

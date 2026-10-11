@@ -20,6 +20,9 @@ public struct PipelineSettings: Sendable {
     /// After a Space switch on the touch display macOS moves focus there; when on, focus that was on another
     /// display is given back (`FocusKeeper`).
     public var keepFocusOnSpaceSwitch = true
+    /// Two-finger scrolls carry the trackpad's gesture stream, so Safari's back/forward page swipe (and other
+    /// apps' trackpad swipes) follow the fingers.
+    public var swipeBetweenPages = true
     public var displayVendor: UInt32 = 7908
     public var displayModel: UInt32 = 342
 
@@ -247,7 +250,11 @@ public final class InputPipeline: @unchecked Sendable {
             deliverer.dragUp(at: point(mapper, at))
             deliverer.end()
         case let .scroll(dx, dy, phase):
-            if phase == .began { begin(.scroll, at: centroid(mapper)) }
+            if phase == .began {
+                begin(.scroll, at: centroid(mapper))
+                // Two fingers, like the trackpad: the page swipe tracks them. One-finger pans stay plain scrolls.
+                deliverer.scrollGestureStream = settings.swipeBetweenPages && contacts.count >= 2
+            }
             let d = delta(mapper, dx, dy)
             deliverer.scroll(dx: d.x, dy: d.y, phase: phase)
         case let .scrollEnded(vx, vy):

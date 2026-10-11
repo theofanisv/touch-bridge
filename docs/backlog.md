@@ -128,7 +128,7 @@ This would make click-and-drag available with one-finger scroll on and no hold n
 - Deliver as a mouse drag (Warp, like hold-drag) from the centroid of the three fingers.
 - Follow `TrackpadThreeFingerDrag`.
 
-## 5. Two-finger swipe left/right = back/forward (investigated 2026-10-10, parked)
+## 5. Two-finger swipe left/right = back/forward (done in v0.6.2: real page swipes)
 
 Safari navigates from trackpad two-finger swipes. Our synthesized horizontal scrolls scroll the page but don't navigate.
 
@@ -144,9 +144,30 @@ Safari navigates from trackpad two-finger swipes. Our synthesized horizontal scr
   - 101 = 60;
   - 119/139 (gesture phase, raw bits 1 began / 2 changed / 4 ended, which the trackpad updates per event and CGEventCreateScrollWheelEvent2 leaves at 1).
 - **Likely cause:** AppKit reads swipe progress from the IOHIDEvent attached to real trackpad events. Synthetic CGEvents carry none.
-- **Options when resumed:**
-  1. **Interactive:** attach a synthetic IOHIDEvent (IOHIDEventCreateScrollEvent + CGEventSetHIDEvent, both private; Mac Mouse Fix uses CGEventSetHIDEvent for dock swipes on new macOS).
-  2. **Pragmatic:** a fast horizontal two-finger flick posts the NavigationSwipe gesture event (type 29, subtype 16), falling back to ⌘[ / ⌘]. No page-slide animation.
+- **Attached HID event, tried 2026-10-11 (time-boxed), S12–S16, also failed:**
+  - The setter is `SLEventSetIOHIDEvent` (SkyLight); `CGEventCopyIOHIDEvent` reads one back (`HIDEventBridge`). The Event Sink now logs the attached event of every scroll.
+  - **What the built-in trackpad attaches to a swipe scroll:**
+    - a Scroll event (built-in flag 0x10, the accelerated delta, the trackpad's sender ID);
+    - a child Scroll event (flags 0x10010, the finger's travel, about −dx/10);
+    - a child VendorDefined event (page 0xFF00, usage 0x18, 124 bytes). Its layout: timestamp at 12, sender at 28, Y/X steps at 40/42, phase at 47, Y/X travel as 16.16 at 48/52, −dy/−dx pixels at 60/64, a flag at 76, device word at 80/88.
+  - S12 used the bare scroll event; S13 added the child; S14 rebuilt the vendor event exactly. S15 marked the events as coming from the HID system (source state 1, no poster fields, field 101 = 60, field 169 set). S16 also routed them through the window server under the hidden cursor.
+  - **Every one arrived intact, but tracking stayed at 0.00 and cancelled**, while real swipes progressed and completed (0.49 → 1.00, −0.68 → −1.00).
+  - **Conclusion:** the progress doesn't come from anything an outside process can put into an event. The multitouch gesture engine apparently tracks the physical swipe itself. The real page-slide swipe is out of reach.
+- **v0.6.0, the pragmatic route (owner's choice): flick both ways, with a setting.**
+  - **Gesture:** a two-finger scroll that travels at least 20 mm, mostly horizontally, and lifts within 300 ms of touching down. Fingers moving right go back, left go forward. The real recording has no such flick.
+  - **Delivery:** ⌘[ / ⌘], but only to apps where they mean history (`AppTraits.usesBracketsForHistory`): browsers, Finder, App Store, System Settings, JetBrains IDEs. In Xcode, VS Code and TextEdit they shift lines.
+    - The window under the fingers is made key first, because the shortcut acts on the key window. The momentum is cancelled.
+    - In other apps the flick stays an ordinary scroll, momentum included.
+  - **Menu:** "Flick Two Fingers to Go Back/Forward", on by default.
+  - **Owner test of v0.6.0: didn't navigate.** The flicks were recognized and sent to Safari (26 log lines), but Safari ignored ⌘[ posted to its process. The Event Sink did receive it correctly (key 33, "[", ⌘). Separately, activating an app from the background was refused while another app was in use.
+  - **v0.6.1:** presses the app's own menu item with the ⌘[ / ⌘] shortcut (Safari History → Back/Forward), found by shortcut through Accessibility, which works without the app being frontmost.
+  - **Owner test of v0.6.1:** "it works, but it is ugly, it just jumps". The owner also noticed that a slow slide already showed the start of Safari's page animation, which then got stuck.
+- **The breakthrough (2026-10-11):** a listen-only event tap on the Event Sink's own process (`CGEvent.tapCreateForPid`) caught 155 type-29 events during a real swipe. AppKit's swipe tracking pulls them straight from the queue, which is why the app-level monitor never showed them.
+  - Each scroll event comes with a **scroll-gesture event**: subtype 6, phase in 132, X in 113/114/116/118 (float bits in 115/117/164), Y in 119/139 (float bits in 123/165), 124 = float bits 1, 135 = 1.
+  - The gesture opens with **subtype 61** and closes with **subtype 62**, both carrying 6.
+  - **S17** (plain scrolls plus this stream) progressed 0.02 → 0.25 and completed to 1.00. The same scrolls without it stayed at 0.00.
+- **v0.6.2:** two-finger scrolls carry the stream (`EventSynth.scrollGesture`, `Deliverer.scrollGestureStream`), so Safari's page swipe follows the fingers one to one and completes or snaps back natively. One-finger scrolls stay plain. The flick and the menu press were removed, since they would have made Safari go back twice. Menu: "Swipe Between Pages (Two Fingers)", on by default.
+  - **Navigation-swipe events (type 29, subtype 16), tried as a window-targeted alternative:** not delivered on macOS 15, neither posted to the app nor through the window server.
 
 ## 6. Swipe left from the right edge = Notification Center (done in v0.5.0)
 

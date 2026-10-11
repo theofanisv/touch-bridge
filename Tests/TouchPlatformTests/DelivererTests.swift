@@ -6,7 +6,7 @@ import Testing
 
 /// Records what the deliverer does instead of touching the window server.
 final class FakeEffects: DeliveryEffects, @unchecked Sendable {
-    var posted: [(type: CGEventType, location: CGPoint, scrollPhase: Int64, momentumPhase: Int64, target: Deliverer.Target)] = []
+    var posted: [(type: CGEventType, location: CGPoint, scrollPhase: Int64, momentumPhase: Int64, target: Deliverer.Target, subtype: Int64)] = []
     var cursor = CGPoint(x: 100, y: 100)   // starts on the MacBook screen
     var hidden = false
     var activated: [pid_t] = []
@@ -16,7 +16,8 @@ final class FakeEffects: DeliveryEffects, @unchecked Sendable {
     func post(_ event: CGEvent, to target: Deliverer.Target) {
         posted.append((event.type, event.location,
                        event.getIntegerValueField(CGEventField(rawValue: 99)!),
-                       event.getIntegerValueField(CGEventField(rawValue: 123)!), target))
+                       event.getIntegerValueField(CGEventField(rawValue: 123)!), target,
+                       event.getIntegerValueField(CGEventField(rawValue: 110)!)))
     }
     func cursorLocation() -> CGPoint? { cursor }
     func warpCursor(to point: CGPoint) { cursor = point }
@@ -108,6 +109,43 @@ private func make() -> (Deliverer, FakeEffects, DispatchQueue) {
     #expect(fx.posted.isEmpty)
 }
 
+// Safari's page swipe measures progress from the trackpad's gesture stream, not the scroll events (Event Sink, S17).
+@Test func aTwoFingerScrollCarriesTheTrackpadsGestureStream() {
+    let (d, fx, queue) = make()
+    queue.sync {
+        d.scrollGestureStream = true
+        d.begin(direct, at: arzopaPoint, appPID: 42, activate: false)
+        d.scroll(dx: 2, dy: 0, phase: .began)
+        d.scroll(dx: 18, dy: 0, phase: .changed)
+        d.scrollEnded(velocityX: 0, velocityY: 0)
+    }
+    // scroll began, gesture begin (61); scroll changed, gesture move (6); scroll ended, gesture move ended (6), gesture end (62)
+    #expect(fx.posted.map { $0.type.rawValue } == [22, 29, 22, 29, 22, 29, 29])
+    #expect(fx.posted.filter { $0.type.rawValue == 29 }.map(\.subtype) == [61, 6, 6, 62])
+}
+
+@Test func withoutTheStreamAScrollIsPlain() {
+    let (d, fx, queue) = make()
+    queue.sync {
+        d.begin(direct, at: arzopaPoint, appPID: 42, activate: false)
+        d.scroll(dx: 2, dy: 0, phase: .began)
+        d.scroll(dx: 18, dy: 0, phase: .changed)
+        d.scrollEnded(velocityX: 0, velocityY: 0)
+    }
+    #expect(fx.posted.allSatisfy { $0.type.rawValue == 22 })
+}
+
+@Test func abortingAStreamedScrollClosesTheGesture() {
+    let (d, fx, queue) = make()
+    queue.sync {
+        d.scrollGestureStream = true
+        d.begin(direct, at: arzopaPoint, appPID: 42, activate: false)
+        d.scroll(dx: 2, dy: 0, phase: .began)
+        d.abortGesture()
+    }
+    #expect(fx.posted.last?.subtype == 62, "the gesture is closed too")
+}
+
 // Review findings 3 and 4: stopping or losing the display mid-gesture must close everything.
 @Test func abortDuringAWarpDragReleasesTheButtonAndTheCursor() {
     let (d, fx, queue) = make()
@@ -188,4 +226,9 @@ private func make() -> (Deliverer, FakeEffects, DispatchQueue) {
 // Owner's choice 2026-10-11: a Space switch by touch keeps focus on the other display, as a setting.
 @Test func aSpaceSwitchKeepsFocusByDefault() {
     #expect(PipelineSettings().keepFocusOnSpaceSwitch == true)
+}
+
+// Owner's choice 2026-10-11: two-finger page swipes, on by default, with a menu switch.
+@Test func swipeBetweenPagesIsOnByDefault() {
+    #expect(PipelineSettings().swipeBetweenPages == true)
 }

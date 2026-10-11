@@ -36,6 +36,7 @@ The app needs **Accessibility** permission (System Settings → Privacy & Securi
 | Two fingers apart/together | Pinch to zoom |
 | Two fingers around each other | Rotate |
 | Two fingers from the right edge, moving left | Notification Center |
+| Two fingers swiping right / left (in apps with trackpad page swipes, such as Safari) | Back / Forward: the page slides with your fingers and completes or snaps back when you lift, as on the trackpad |
 | Three fingers moving together | Click-and-drag (grabs at the centre of the fingers, or under the first finger: menu "Three-Finger Drag Point") |
 | One finger resting on an item, two more added within 1.5 s, then moving | Click-and-drag that grabs exactly where the resting finger first touched |
 | Four fingers up / down | Mission Control / App Exposé |
@@ -70,6 +71,7 @@ The menu has:
 - Delivery: Automatic, Direct only (testing), Warp only (testing);
 - Pinch & Rotate Direct;
 - One-Finger Drag Scrolls;
+- Swipe Between Pages (Two Fingers) (default on);
 - Follow Trackpad Settings, with the trackpad settings it read;
 - Three-Finger Drag (greyed while following the trackpad), Three-Finger Drag Point;
 - Launchpad on the Touch Display: Bring the Dock Over, Then Back (default), Bring the Dock Over (it stays), Leave the Dock Where It Is;

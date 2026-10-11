@@ -70,6 +70,42 @@ enum EventSynth {
         return event
     }
 
+    /// The gesture stream a real trackpad sends alongside a two-finger scroll (Event Sink tap, 2026-10-11).
+    /// AppKit's swipe tracking (Safari back/forward) measures progress from it, not from the scroll events.
+    enum ScrollGesture {
+        /// Subtype 61 after the scroll's `began` event.
+        case begin
+        /// Subtype 6 with the finger movement (natural direction, as the scroll's pixel delta), per scroll event.
+        case move(dx: Double, dy: Double, phase: Phase)
+        /// Subtype 62 after the scroll's `ended` event (preceded by a `.move` with phase `.ended`).
+        case end
+    }
+
+    static func scrollGesture(_ part: ScrollGesture, at point: CGPoint, window: Int?, source: CGEventSource?) -> CGEvent? {
+        guard let event = CGEvent(source: source) else { return nil }
+        func f(_ n: UInt32) -> CGEventField { CGEventField(rawValue: n)! }
+        func floatBits(_ v: Double) -> Int64 { Int64(Float(v).bitPattern) }
+        event.setIntegerValueField(eventType, value: nsEventTypeGesture)
+        event.location = point
+        switch part {
+        case .begin, .end:
+            if case .begin = part { event.setIntegerValueField(gestureHIDType, value: 61) } else { event.setIntegerValueField(gestureHIDType, value: 62) }
+            for n: UInt32 in [113, 114, 116, 118] { event.setDoubleValueField(f(n), value: Double(Float(bitPattern: 6))) }
+            for n: UInt32 in [115, 117, 164] { event.setIntegerValueField(f(n), value: 6) }   // the gesture is a scroll (6)
+        case let .move(dx, dy, phase):
+            event.setIntegerValueField(gestureHIDType, value: 6)
+            for n: UInt32 in [113, 114, 116, 118] { event.setDoubleValueField(f(n), value: dx) }
+            for n: UInt32 in [115, 117, 164] { event.setIntegerValueField(f(n), value: floatBits(dx)) }
+            for n: UInt32 in [119, 139] { event.setDoubleValueField(f(n), value: dy) }
+            for n: UInt32 in [123, 165] { event.setIntegerValueField(f(n), value: floatBits(dy)) }
+            event.setDoubleValueField(f(124), value: Double(Float(bitPattern: 1)))
+            event.setIntegerValueField(f(135), value: 1)
+            event.setIntegerValueField(gesturePhase, value: phaseMask(phase))
+        }
+        finish(event, window: window)
+        return event
+    }
+
     private static func phaseMask(_ phase: Phase) -> Int64 {
         switch phase {
         case .began: 1

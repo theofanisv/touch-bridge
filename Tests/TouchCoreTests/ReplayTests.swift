@@ -95,7 +95,7 @@ struct Recording {
         } else if closes {
             #expect(open == name, "\(name) ended while \(open ?? "nothing") was open")
             open = nil
-        } else if name == "tap" || name == "rightClick" || name == "notificationCenter" {
+        } else if ["tap", "rightClick", "notificationCenter"].contains(name) {
             #expect(open == nil)
             histogram[name, default: 0] += 1
         } else {

@@ -1,4 +1,5 @@
 import AppKit
+import TouchPlatform
 
 /// Test window for the M1 compatibility matrix: shows and logs every event an ordinary app receives,
 /// so we can see what Direct and Warp delivery actually produce. Opens on the touch display.
@@ -30,6 +31,36 @@ final class EventSink: NSObject, NSApplicationDelegate {
         window.makeKeyAndOrderFront(nil)
         log.write("— event sink opened on \(screen.localizedName), window \(window.windowNumber), pid \(getpid()) —")
         logEveryEventEnteringTheApp()
+        tapEveryEventSentToThisProcess()
+    }
+
+    /// A listen-only tap on every event the window server sends this process, including those that AppKit's
+    /// swipe tracking pulls straight from the queue (the app-level monitor never sees them).
+    private func tapEveryEventSentToThisProcess() {
+        let callback: CGEventTapCallBack = { _, type, event, info in
+            guard let info else { return Unmanaged.passUnretained(event) }
+            let sink = Unmanaged<EventSink>.fromOpaque(info).takeUnretainedValue()
+            if type.rawValue != 5 {   // not mouse moved
+                let fields = (100..<180).compactMap { i -> String? in
+                    guard let field = CGEventField(rawValue: UInt32(i)) else { return nil }
+                    let int = event.getIntegerValueField(field), double = event.getDoubleValueField(field)
+                    if double != 0, double != Double(int) { return String(format: "%d=%.4g", i, double) }
+                    return int == 0 ? nil : "\(i)=\(int)"
+                }.joined(separator: " ")
+                let tag = event.getIntegerValueField(.eventSourceUserData) == 0x5442_4752 ? " TOUCHBRIDGE" : ""
+                sink.log.write("TAP type=\(type.rawValue)\(tag) \(fields)")
+            }
+            return Unmanaged.passUnretained(event)
+        }
+        guard let tap = CGEvent.tapCreateForPid(pid: getpid(), place: .headInsertEventTap, options: .listenOnly,
+                                                eventsOfInterest: CGEventMask.max, callback: callback,
+                                                userInfo: Unmanaged.passUnretained(self).toOpaque()) else {
+            log.write("event tap for this process could not be created")
+            return
+        }
+        CFRunLoopAddSource(CFRunLoopGetMain(), CFMachPortCreateRunLoopSource(nil, tap, 0), .commonModes)
+        CGEvent.tapEnable(tap: tap, enable: true)
+        log.write("tapping every event sent to this process")
     }
 
     /// Logs events as the app dequeues them, before any window or view sees them, so we can tell
@@ -57,6 +88,13 @@ final class EventSink: NSObject, NSApplicationDelegate {
                 fields = String(format: " phase=%lu momentum=%lu dx=%.1f dy=%.1f precise=%@ inverted=%@",
                                 event.phase.rawValue, event.momentumPhase.rawValue, event.scrollingDeltaX, event.scrollingDeltaY,
                                 event.hasPreciseScrollingDeltas ? "y" : "n", event.isDirectionInvertedFromDevice ? "y" : "n") + fields
+            }
+            if event.type == .scrollWheel, event.phase == .began || event.phase == .ended || event.phase == .changed && event.scrollingDeltaX != 0,
+               let cg = event.cgEvent {
+                fields += " hid=" + (HIDEventBridge.describeAttached(cg)?.replacingOccurrences(of: "\n", with: " | ") ?? "none")
+            }
+            if event.type == .keyDown || event.type == .keyUp {
+                fields += String(format: " key=%d chars=%@ mods=%lu", event.keyCode, event.characters ?? "", event.modifierFlags.intersection(.deviceIndependentFlagsMask).rawValue)
             }
             var windowLocation = ""
             if let cg = event.cgEvent, let getter = EventSink.getWindowLocation {

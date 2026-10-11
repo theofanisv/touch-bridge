@@ -189,10 +189,80 @@ public enum DirectSelfTest {
                 e.setDoubleValueField(f(126), value: Double(Float(bitPattern: 6)))
                 e.setIntegerValueField(f(87), value: 4_294_970_419)
             }),
+            // An attached HID scroll event, as real trackpad events carry (filled in per event below).
+            ("S12 S11 + attached HID scroll event", { e, dx in
+                e.setIntegerValueField(f(137), value: 1)
+                e.setDoubleValueField(f(175), value: -dx / 10)
+                e.setDoubleValueField(f(177), value: -(dx * 1.4).rounded())
+                e.setDoubleValueField(f(126), value: Double(Float(bitPattern: 6)))
+                e.setIntegerValueField(f(87), value: 4_294_970_419)
+            }),
+            // The trackpad's full structure: built-in parent + child scroll (finger travel) …
+            ("S13 S11 + trackpad-shaped HID scroll with child", { e, dx in
+                e.setIntegerValueField(f(137), value: 1)
+                e.setDoubleValueField(f(175), value: -dx / 10)
+                e.setDoubleValueField(f(177), value: -(dx * 1.4).rounded())
+                e.setDoubleValueField(f(126), value: Double(Float(bitPattern: 6)))
+                e.setIntegerValueField(f(87), value: 4_294_970_419)
+            }),
+            // As the hardware sends them: HID-system source state, no poster fields (S15), and also routed by the
+            // window server to the window under the (hidden) cursor instead of posted to the app (S16).
+            ("S15 S14 + HID-system source, no poster fields", { e, dx in
+                e.setIntegerValueField(f(137), value: 1)
+                e.setDoubleValueField(f(175), value: -dx / 10)
+                e.setDoubleValueField(f(177), value: -(dx * 1.4).rounded())
+                e.setDoubleValueField(f(126), value: Double(Float(bitPattern: 6)))
+                e.setIntegerValueField(f(87), value: 4_294_970_419)
+                e.setIntegerValueField(f(101), value: 60)
+                e.setIntegerValueField(f(169), value: Int64(mach_absolute_time()))
+                for n: UInt32 in [41, 42, 43, 44] { e.setIntegerValueField(f(n), value: 0) }
+                e.setIntegerValueField(f(45), value: 1)
+            }),
+            ("S16 S15 routed through the window server", { e, dx in
+                e.setIntegerValueField(f(137), value: 1)
+                e.setDoubleValueField(f(175), value: -dx / 10)
+                e.setDoubleValueField(f(177), value: -(dx * 1.4).rounded())
+                e.setDoubleValueField(f(126), value: Double(Float(bitPattern: 6)))
+                e.setIntegerValueField(f(87), value: 4_294_970_419)
+                e.setIntegerValueField(f(101), value: 60)
+                e.setIntegerValueField(f(169), value: Int64(mach_absolute_time()))
+                for n: UInt32 in [41, 42, 43, 44] { e.setIntegerValueField(f(n), value: 0) }
+                e.setIntegerValueField(f(45), value: 1)
+            }),
+            // The gesture stream (type 29: subtype 61, 6 per move, 62) that real swipes carry next to the scrolls.
+            ("S17 S8 + the trackpad's scroll-gesture stream", { _, _ in }),
+            // … plus the multitouch driver's vendor event.
+            ("S14 S13 + multitouch vendor event", { e, dx in
+                e.setIntegerValueField(f(137), value: 1)
+                e.setDoubleValueField(f(175), value: -dx / 10)
+                e.setDoubleValueField(f(177), value: -(dx * 1.4).rounded())
+                e.setDoubleValueField(f(126), value: Double(Float(bitPattern: 6)))
+                e.setIntegerValueField(f(87), value: 4_294_970_419)
+            }),
         ]
         let only = CommandLine.arguments.firstIndex(of: "--from").map { Int(CommandLine.arguments[$0 + 1]) ?? 1 } ?? 1
         for (label, extra) in variants.dropFirst(only - 1) {
-            let gesturePhase = ["S8", "S9", "S10", "S11"].contains { label.hasPrefix($0 + " ") }
+            let gesturePhase = ["S8", "S9", "S10", "S11", "S12", "S13", "S14", "S15", "S16", "S17"].contains { label.hasPrefix($0 + " ") }
+            let gestureStream = label.hasPrefix("S17 ")
+            let attachHID = label.hasPrefix("S12 ")
+            let trackpadHID = ["S13", "S14", "S15", "S16"].contains { label.hasPrefix($0 + " ") }
+            let vendor = ["S14", "S15", "S16"].contains { label.hasPrefix($0 + " ") }
+            let routed = label.hasPrefix("S16 ")
+            let saved = CGEvent(source: nil)?.location
+            if routed {
+                CursorVisibility.allowHidingInBackground()
+                CursorVisibility.hide()
+                CGWarpMouseCursorPosition(p)
+            }
+            defer {
+                if routed, let saved {
+                    CGWarpMouseCursorPosition(saved)
+                    CGAssociateMouseAndMouseCursorPosition(1)
+                    CursorVisibility.show()
+                }
+            }
+            var changedCount = 0
+            if attachHID || trackpadHID { log("HID bridge available: \(HIDEventBridge.isAvailable)") }
             func post(_ dx: Double, _ phase: EventSynth.Phase?, _ momentum: EventSynth.MomentumPhase) {
                 guard let e = EventSynth.scroll(dx: dx, dy: 0, at: p, phase: phase, momentum: momentum, window: sink.number, source: source) else { return }
                 extra(e, dx)
@@ -201,7 +271,26 @@ public enum DirectSelfTest {
                     e.setDoubleValueField(f(119), value: Double(Float(bitPattern: bits)))
                     e.setDoubleValueField(f(139), value: Double(Float(bitPattern: bits)))
                 }
-                target.post(e)
+                if attachHID, let phase {
+                    let hidPhase: HIDEventBridge.Phase = switch phase { case .began: .began; case .changed: .changed; case .ended: .ended }
+                    HIDEventBridge.attachScroll(to: e, x: -(dx * 1.4).rounded(), y: 0, phase: hidPhase, senderID: 4_294_970_419)
+                }
+                if trackpadHID, let phase {
+                    let hidPhase: HIDEventBridge.Phase = switch phase { case .began: .began; case .changed: .changed; case .ended: .ended }
+                    if phase == .changed { changedCount += 1 }
+                    HIDEventBridge.attachTrackpadScroll(to: e, dx: dx, dy: 0, phase: hidPhase, senderID: 4_294_970_419,
+                                                        vendorData: vendor, gestureUnderway: changedCount > 8)
+                }
+                if routed { e.post(tap: .cghidEventTap) } else { target.post(e) }
+                if gestureStream, let phase {
+                    var parts: [EventSynth.ScrollGesture] = []
+                    switch phase {
+                    case .began: parts = [.begin]
+                    case .changed: parts = [.move(dx: dx, dy: 0, phase: .changed)]
+                    case .ended: parts = [.move(dx: 0, dy: 0, phase: .ended), .end]
+                    }
+                    for part in parts { EventSynth.scrollGesture(part, at: p, window: sink.number, source: source).map { target.post($0) } }
+                }
             }
             log("posting \(label)")
             post(2, .began, .none)
