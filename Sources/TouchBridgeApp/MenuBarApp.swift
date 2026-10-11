@@ -20,6 +20,7 @@ final class MenuBarApp: NSObject, NSApplicationDelegate {
     private var oneFingerScrollItem: NSMenuItem!
     private var threeFingerItem: NSMenuItem!
     private var anchorItems: [NSMenuItem] = []
+    private var launchpadItems: [NSMenuItem] = []
     private var stored = StoredSettings.load()
     private var trackpad = TrackpadPreferencesReader.read()
     private var followTrackpadItem: NSMenuItem!
@@ -53,7 +54,7 @@ final class MenuBarApp: NSObject, NSApplicationDelegate {
         pipeline.update { initial.apply(to: &$0, trackpad: initialTrackpad) }
         log.write("trackpad settings: \(trackpad.summary)\(stored.followTrackpad ? " (followed)" : " (not followed)")")
         watchTrackpadSettings()
-        log.write("settings: delivery \(initial.delivery?.rawValue ?? "automatic"), one-finger drag \(initial.oneFingerScroll ? "scrolls" : "clicks-and-drags"), three-finger drag \(initial.threeFingerDrag ? "on (\(initial.threeFingerAnchor.rawValue))" : "off"), pinch & rotate direct \(initial.gesturesDirect), return focus \(initial.returnFocus)")
+        log.write("settings: delivery \(initial.delivery?.rawValue ?? "automatic"), one-finger drag \(initial.oneFingerScroll ? "scrolls" : "clicks-and-drags"), three-finger drag \(initial.threeFingerDrag ? "on (\(initial.threeFingerAnchor.rawValue))" : "off"), pinch & rotate direct \(initial.gesturesDirect), return focus \(initial.returnFocus), launchpad \(initial.launchpadDock.rawValue)")
         if CommandLine.arguments.contains("--dry-run") {
             dryRunItem.state = .on
             pipeline.update { $0.dryRun = true }
@@ -129,6 +130,21 @@ final class MenuBarApp: NSObject, NSApplicationDelegate {
         let anchorParent = NSMenuItem(title: "Three-Finger Drag Point", action: nil, keyEquivalent: "")
         anchorParent.submenu = anchorMenu
         menu.addItem(anchorParent)
+        // Launchpad opens on the display that has the Dock.
+        let launchpadMenu = NSMenu()
+        for (title, mode) in [("Bring the Dock Over, Then Back", LaunchpadDockMode.bringDockAndReturn),
+                              ("Bring the Dock Over (it stays)", .bringDock),
+                              ("Leave the Dock Where It Is", .leave)] {
+            let entry = NSMenuItem(title: title, action: #selector(chooseLaunchpadDock(_:)), keyEquivalent: "")
+            entry.target = self
+            entry.representedObject = mode.rawValue
+            entry.state = mode == stored.launchpadDock ? .on : .off
+            launchpadItems.append(entry)
+            launchpadMenu.addItem(entry)
+        }
+        let launchpadParent = NSMenuItem(title: "Launchpad on the Touch Display", action: nil, keyEquivalent: "")
+        launchpadParent.submenu = launchpadMenu
+        menu.addItem(launchpadParent)
         returnFocusItem = item(menu, "Return Focus to Previous App", #selector(toggleReturnFocus))
         returnFocusItem.state = stored.returnFocus ? .on : .off
         dryRunItem = item(menu, "Dry Run (log only)", #selector(toggleDryRun))
@@ -268,6 +284,16 @@ final class MenuBarApp: NSObject, NSApplicationDelegate {
         stored.save()
         pipeline.update { $0.threeFingerAnchor = anchor }
         log.write("three-finger drag point: \(anchor.rawValue)")
+    }
+
+    @objc private func chooseLaunchpadDock(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let mode = LaunchpadDockMode(rawValue: raw) else { return }
+        launchpadItems.forEach { $0.state = $0 == sender ? .on : .off }
+        stored.launchpadDock = mode
+        stored.save()
+        pipeline.update { $0.launchpadDock = mode }
+        log.write("launchpad on the touch display: \(mode.rawValue)")
+        if mode == .bringDockAndReturn { pipeline.returnDockHome() }
     }
 
     // MARK: login item

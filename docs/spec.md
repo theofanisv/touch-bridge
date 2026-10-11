@@ -221,3 +221,24 @@ Findings from building and testing on the hardware. These override the plan wher
   - `Deliverer.abortGesture()` closes momentum, open phases and pressed buttons, and returns the cursor. It runs on Disable, on Quit, and when the touch display disappears mid-gesture.
   - A Direct gesture that interrupts a Warp gesture returns the cursor immediately.
   - Chromium/Electron apps are never queried through Accessibility, because queries make them build their accessibility tree.
+- **System gestures (2026-10-10):**
+  - **Dock swipes:** Mission Control, App Exposé, Spaces, Launchpad and Show Desktop are synthesized as the trackpad's private "dock swipe" events (`DockSwipe`, format from Mac Mouse Fix):
+    - per step, a type-30 event with subtype 23 (`kIOHIDEventTypeDockSwipe`), phase, swipe type and accumulated progress, followed by a type-29 companion, both posted to the session tap;
+    - the end event is re-sent after 0.2 s and 0.5 s.
+  - **Swipe types on macOS 15, verified on screen:** 1 = horizontal (Spaces), 2 = vertical (Mission Control up, App Exposé down), 3 = pinch (needs the inverted flag: in = Launchpad, out = Show Desktop). Type 4 does nothing.
+  - **Notification Center:** opened through the menu-bar clock.
+  - **Which display each appears on** (owner report, `--ax-probe --menubar`):
+    - Notification Center opens on the display whose clock is used. Accessibility only exposes the clock of the active menu bar (the display with the focused window), and the inactive display's menu bar answers no Accessibility hit-tests.
+    - Space switching acts on the display with the active menu bar.
+    - Launchpad ignored focus and opened on the MacBook, where the cursor was. The Dock imports both `CGSCopyActiveMenuBarDisplayIdentifier` and `CGSGetCurrentCursorLocation`.
+  - **Self-test (2026-10-11, `--system-ui-selftest`):** Notification Center opens on the display with the cursor, whatever the active menu bar; warping the hidden cursor is enough. Launchpad opened on the MacBook with the cursor and the active menu bar on the ARZOPA, so it follows the Dock's display or the main display.
+  - **v0.5.2:** Notification Center: press the clock with the hidden cursor on the touch display for 0.8 s (the v0.5.1 click below was replaced). Pinches no longer park the cursor.
+  - **Launchpad follows the Dock** (self-test lp-4). The Dock moves to a display when the cursor pushes against its bottom edge, and synthetic mouse-moved events with a downward delta do that.
+  - **v0.5.3:** a pinch-in on the touch display brings the Dock there first, as a setting: bring over (default), bring over then back, or leave (`LaunchpadDock`, `DockLocator`, `Deliverer.nudge`).
+  - **v0.5.5:** "then back" is the default.
+  - **v0.5.4:** with "then back" the Dock lives off the touch display. It returns after every Launchpad opened by touch, and when the menu item is chosen. Moving the Dock over took 202 ms on the owner's first try.
+  - **Targeting (v0.5.1; owner's test: Spaces work, Notification Center and Launchpad still open on the MacBook; see backlog "Next session"):**
+    - Notification Center: if the active clock isn't on the touch display, click the touch display's own clock (Warp), only after the window list confirms a ControlCenter status item at that point.
+    - Spaces and Launchpad: the hidden cursor waits on the touch display until 0.8 s after the swipe ends.
+    - Spaces only: when another display has the active menu bar, focus the window under the fingers (Accessibility raise and main, then activate), and hold the swipe until the touch display has the active menu bar (at most 250 ms; `DockSwipeHold`).
+    - The log records the active menu bar at each swipe and the display whose Space changed.

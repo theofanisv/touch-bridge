@@ -66,6 +66,48 @@ private func make() -> (Deliverer, FakeEffects, DispatchQueue) {
     #expect(fx.cursor == CGPoint(x: 100, y: 100))
 }
 
+// Launchpad and Space switching open where the cursor is: it waits on the touch display until the animation is under way.
+@Test func aSystemGestureKeepsTheCursorParkedForTheRequestedTime() {
+    let (d, fx, queue) = make()
+    queue.sync {
+        d.begin(.warp, at: arzopaPoint, appPID: nil, activate: false)
+        d.end(returnDelay: 0.4)
+    }
+    Thread.sleep(forTimeInterval: Deliverer.warpReturnDelay + 0.1)
+    queue.sync {}
+    #expect(fx.hidden == true)
+    #expect(fx.cursor == arzopaPoint, "still on the touch display")
+    Thread.sleep(forTimeInterval: 0.4)
+    queue.sync {}
+    #expect(fx.hidden == false)
+    #expect(fx.cursor == CGPoint(x: 100, y: 100))
+    #expect(fx.posted.isEmpty, "parking posts nothing")
+}
+
+// Launchpad opens where the Dock is; the Dock moves to a display when the cursor pushes against its bottom edge.
+@Test func aNudgePushesTheParkedCursorThroughTheWindowServer() {
+    let (d, fx, queue) = make()
+    let edge = CGPoint(x: 2688, y: 1079)
+    queue.sync {
+        d.begin(.warp, at: edge, appPID: nil, activate: false)
+        d.nudge(at: edge, dx: 0, dy: 4)
+    }
+    #expect(fx.posted.count == 1)
+    #expect(fx.posted.first?.type == .mouseMoved)
+    #expect(fx.posted.first?.location == edge)
+    #expect(fx.posted.first?.target == .warp)
+    #expect(fx.hidden == true, "the cursor stays hidden while it pushes")
+}
+
+@Test func aNudgeInDryRunPostsNothing() {
+    let (d, fx, queue) = make()
+    queue.sync {
+        d.dryRun = true
+        d.nudge(at: CGPoint(x: 2688, y: 1079), dx: 0, dy: 4)
+    }
+    #expect(fx.posted.isEmpty)
+}
+
 // Review findings 3 and 4: stopping or losing the display mid-gesture must close everything.
 @Test func abortDuringAWarpDragReleasesTheButtonAndTheCursor() {
     let (d, fx, queue) = make()
@@ -136,4 +178,9 @@ private func make() -> (Deliverer, FakeEffects, DispatchQueue) {
     Thread.sleep(forTimeInterval: 0.05)
     #expect(queue.sync { fx.posted.allSatisfy { $0.momentumPhase == 0 } })
     #expect(fx.posted.last?.scrollPhase == 4)
+}
+
+// Owner's choice 2026-10-11: Launchpad by touch borrows the Dock and gives it back.
+@Test func launchpadBringsTheDockOverThenBackByDefault() {
+    #expect(PipelineSettings().launchpadDock == .bringDockAndReturn)
 }

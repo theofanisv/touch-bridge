@@ -8,6 +8,18 @@ if let index = arguments.firstIndex(of: "--probe") {
     Probe(duration: seconds).run()
 }
 
+if arguments.contains("--system-ui-selftest") {
+    let log = FileLog(name: "systemui")
+    SystemUISelfTest.run { log.write($0) }
+    exit(0)
+}
+
+if arguments.contains("--dockswipe-selftest") {
+    let log = FileLog(name: "selftest")
+    DockSwipeSelfTest.run { log.write($0) }
+    exit(0)
+}
+
 if arguments.contains("--restart-selftest") {
     // Reproduces "Disable → Enable": start, stop, start the HID source again in one process.
     let log = FileLog(name: "selftest")

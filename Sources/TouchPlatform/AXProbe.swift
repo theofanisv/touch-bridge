@@ -7,6 +7,7 @@ import TouchCore
 /// Used to design the window-drag-area rules from real apps. Sends no events.
 public enum AXProbe {
     public static func run(log: (String) -> Void) {
+        if CommandLine.arguments.contains("--menubar") { MenuBarProbe.run(log: log); return }
         if CommandLine.arguments.contains("--map") { map(log: log); return }
         if let i = CommandLine.arguments.firstIndex(of: "--owner"), CommandLine.arguments.indices.contains(i + 1) {
             column(owner: CommandLine.arguments[i + 1], log: log); return

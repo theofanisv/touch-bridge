@@ -22,6 +22,10 @@ public struct ScreenRect: Equatable, Sendable {
         self.width = width
         self.height = height
     }
+
+    public func contains(_ p: ScreenPoint) -> Bool {
+        p.x >= x && p.x < x + width && p.y >= y && p.y < y + height
+    }
 }
 
 /// Maps normalized panel coordinates (native orientation) onto the touch display's global bounds.

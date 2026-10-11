@@ -120,12 +120,14 @@ final class Deliverer {
         effects.warpCursor(to: point)
     }
 
-    func end() {
+    /// `returnDelay`: how long a parked cursor stays at the finger (longer for system gestures, which
+    /// pick their display from the cursor while their animation starts).
+    func end(returnDelay: TimeInterval = Deliverer.warpReturnDelay) {
         scheduleFocusReturn()
         guard parked else { return }
         let work = DispatchWorkItem { [weak self] in self?.returnCursor() }
         restore = work
-        queue.asyncAfter(deadline: .now() + Self.warpReturnDelay, execute: work)
+        queue.asyncAfter(deadline: .now() + returnDelay, execute: work)
     }
 
     private func scheduleFocusReturn() {
@@ -160,6 +162,17 @@ final class Deliverer {
 
     func dragUp(at point: CGPoint) {
         release(.leftMouseUp, at: point, button: .left, clickState: 1)
+    }
+
+    /// A mouse-moved event with a push direction, through the window server. It moves the parked cursor,
+    /// and pushes against a display edge (the Dock moves to a display when the cursor pushes against its
+    /// bottom edge).
+    func nudge(at point: CGPoint, dx: Int64, dy: Int64) {
+        guard let event = CGEvent(mouseEventSource: warpSource, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left) else { return }
+        event.setIntegerValueField(.mouseEventDeltaX, value: dx)
+        event.setIntegerValueField(.mouseEventDeltaY, value: dy)
+        guard !dryRun else { return }
+        effects.post(event, to: .warp)
     }
 
     /// Sends the missing mouse-up if a press is still open (quit, disable, crash recovery).

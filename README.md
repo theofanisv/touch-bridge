@@ -35,7 +35,22 @@ The app needs **Accessibility** permission (System Settings → Privacy & Securi
 | Two fingers moving together | Scroll with momentum |
 | Two fingers apart/together | Pinch to zoom |
 | Two fingers around each other | Rotate |
-| More than 3 fingers | Ignored (palm). All 10 fingers are still tracked; see "Touches" in the menu |
+| Two fingers from the right edge, moving left | Notification Center |
+| Three fingers moving together | Click-and-drag (grabs at the centre of the fingers, or under the first finger: menu "Three-Finger Drag Point") |
+| Four fingers up / down | Mission Control / App Exposé |
+| Four fingers left / right | Switch Space |
+| Thumb and three or four fingers pinching / spreading | Launchpad / Show Desktop |
+| Six or more fingers | Ignored (palm). All 10 fingers are still tracked; see "Touches" in the menu |
+
+With "Follow Trackpad Settings" on (the default), each gesture follows its switch in System Settings → Trackpad, re-read every 3 s and after wake.
+
+The four-finger gestures are the system's own animated ones: the fingers drive Mission Control, Spaces and Launchpad as on the trackpad.
+- Space switching acts on the touch display. When another display has the active menu bar, the window under the fingers is focused first, and the hidden cursor waits on the touch display until the animation is under way.
+- Notification Center opens on the touch display: it appears wherever the cursor is, so the menu-bar clock is pressed while the hidden cursor waits on the touch display (0.8 s).
+- Launchpad opens on the display that has the Dock. A pinch-in on the touch display first brings the Dock there: the hidden cursor pushes against that display's bottom edge, as moving the Dock by hand does. Menu "Launchpad on the Touch Display":
+  - Bring the Dock Over, Then Back (default): the Dock lives on the other display. After each Launchpad opened by touch, it returns once Launchpad has closed and no finger is on the panel. This happens even if it was already on the touch display. Choosing this item also sends a Dock found on the touch display home. With this mode, the trackpad keeps opening Launchpad on the MacBook.
+  - Bring the Dock Over (it stays): the Dock then stays on the touch display, so the trackpad also opens Launchpad there.
+  - Leave the Dock Where It Is: Launchpad opens wherever the Dock is.
 
 After a power cycle (unplug, sleep) the panel starts in a single-touch "mouse" mode. TouchBridge switches it back to multitouch when it connects, and again if mouse-mode reports ever arrive. Both steps are logged.
 
@@ -54,8 +69,12 @@ The menu has:
 - Delivery: Automatic, Direct only (testing), Warp only (testing);
 - Pinch & Rotate Direct;
 - One-Finger Drag Scrolls;
+- Follow Trackpad Settings, with the trackpad settings it read;
+- Three-Finger Drag (greyed while following the trackpad), Three-Finger Drag Point;
+- Launchpad on the Touch Display: Bring the Dock Over, Then Back (default), Bring the Dock Over (it stays), Leave the Dock Where It Is;
 - Return Focus to Previous App;
 - Dry Run (log only);
+- Start at Login;
 - Open Event Sink, Open Logs Folder, Quit.
 
 ## Logs and diagnostics
@@ -68,6 +87,7 @@ All logs are in `~/Library/Logs/TouchBridge/`:
 - `open -n build/TouchBridge.app --args --dry-run`: recognizes touches and logs them without posting anything.
 - `open -g -n build/TouchBridge.app --args --direct-selftest`: posts test events to the Event Sink only.
 - `open -g -n build/TouchBridge.app --args --ax-probe --map`: read-only map of the window-drag areas on screen.
+- `open -g -n build/TouchBridge.app --args --ax-probe --menubar`: read-only report of each display's menu bar and clock, the active menu-bar display and each display's current Space.
 - `open -g -n build/TouchBridge.app --args --restart-selftest`: starts, stops and restarts the panel input (regression check for "Disable → Enable").
 
 ## Rolling back

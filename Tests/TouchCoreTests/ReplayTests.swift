@@ -84,6 +84,9 @@ struct Recording {
         case .scrollEnded: ("scroll", false, true)
         case let .magnify(_, phase): ("magnify", phase == .began, phase == .ended)
         case let .rotate(_, phase): ("rotate", phase == .began, phase == .ended)
+        case let .dockSwipe(_, _, phase): ("dockSwipe", phase == .began, phase == .ended)
+        case .dockSwipeCancelled: ("dockSwipe", false, true)
+        case .notificationCenter: ("notificationCenter", false, false)
         }
         if opens {
             #expect(open == nil, "\(name) began while \(open ?? "") was open")
@@ -92,7 +95,7 @@ struct Recording {
         } else if closes {
             #expect(open == name, "\(name) ended while \(open ?? "nothing") was open")
             open = nil
-        } else if name == "tap" || name == "rightClick" {
+        } else if name == "tap" || name == "rightClick" || name == "notificationCenter" {
             #expect(open == nil)
             histogram[name, default: 0] += 1
         } else {

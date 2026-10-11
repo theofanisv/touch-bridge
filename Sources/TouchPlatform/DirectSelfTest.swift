@@ -42,6 +42,10 @@ public enum DirectSelfTest {
             ])
         }
 
+        if CommandLine.arguments.contains("--swipe") {
+            swipeVariants(sink: sink, target: target, source: source, log: log)
+            return
+        }
         if CommandLine.arguments.contains("--button") {
             buttonVariants(sink: sink, target: target, source: source, log: log)
             return
@@ -112,6 +116,100 @@ public enum DirectSelfTest {
             tap("B4 Direct with the real cursor over the button", cursorOver: true)
         } else {
             log("B4 skipped: topmost window at the button is \(top?.ownerName ?? "none")")
+        }
+        log("done")
+    }
+
+    /// Horizontal two-finger swipes posted to the sink with progressively more of the fields a real trackpad
+    /// swipe carries, to find what macOS's swipe tracking (Safari back/forward) needs. The sink logs
+    /// "SWIPE tracking … complete=y amount=1.00" when a swipe completes.
+    private static func swipeVariants(sink: WindowInfo, target: DirectTarget, source: CGEventSource?, log: (String) -> Void) {
+        NSRunningApplication(processIdentifier: sink.pid)?.activate()
+        Thread.sleep(forTimeInterval: 0.6)
+        let p = CGPoint(x: sink.bounds.x + 450, y: sink.bounds.y + 300)
+        func f(_ n: UInt32) -> CGEventField { CGEventField(rawValue: n)! }
+        typealias Extra = (CGEvent, Double) -> Void   // (event, dx of this event)
+        let variants: [(String, Extra)] = [
+            ("S1 baseline", { _, _ in }),
+            ("S2 + accelerated/raw horizontal deltas (175, 177)", { e, dx in
+                e.setDoubleValueField(f(175), value: -dx * 0.0222)
+                e.setIntegerValueField(f(177), value: Int64(-dx.rounded()))
+            }),
+            ("S3 + field 137 = 1", { e, dx in
+                e.setDoubleValueField(f(175), value: -dx * 0.0222)
+                e.setIntegerValueField(f(177), value: Int64(-dx.rounded()))
+                e.setIntegerValueField(f(137), value: 1)
+            }),
+            ("S4 + sender id 87 (the trackpad's)", { e, dx in
+                e.setDoubleValueField(f(175), value: -dx * 0.0222)
+                e.setIntegerValueField(f(177), value: Int64(-dx.rounded()))
+                e.setIntegerValueField(f(137), value: 1)
+                e.setIntegerValueField(f(87), value: 4_294_970_419)
+            }),
+            // Field 126 holds the underlying HID event type as raw bits: 6 = kIOHIDEventTypeScroll on the trackpad.
+            ("S5 + 126 = HID type scroll (6)", { e, dx in
+                e.setDoubleValueField(f(175), value: -dx * 0.0222)
+                e.setIntegerValueField(f(177), value: Int64(-dx.rounded()))
+                e.setIntegerValueField(f(137), value: 1)
+                e.setIntegerValueField(f(87), value: 4_294_970_419)
+                e.setDoubleValueField(f(126), value: Double(Float(bitPattern: 6)))
+            }),
+            ("S6 + 169 = HID timestamp", { e, dx in
+                e.setDoubleValueField(f(175), value: -dx * 0.0222)
+                e.setIntegerValueField(f(177), value: Int64(-dx.rounded()))
+                e.setIntegerValueField(f(137), value: 1)
+                e.setIntegerValueField(f(87), value: 4_294_970_419)
+                e.setDoubleValueField(f(126), value: Double(Float(bitPattern: 6)))
+                e.setIntegerValueField(f(169), value: Int64(mach_absolute_time()))
+            }),
+            ("S7 + 101 = 60", { e, dx in
+                e.setDoubleValueField(f(175), value: -dx * 0.0222)
+                e.setIntegerValueField(f(177), value: Int64(-dx.rounded()))
+                e.setIntegerValueField(f(137), value: 1)
+                e.setIntegerValueField(f(87), value: 4_294_970_419)
+                e.setDoubleValueField(f(126), value: Double(Float(bitPattern: 6)))
+                e.setIntegerValueField(f(169), value: Int64(mach_absolute_time()))
+                e.setIntegerValueField(f(101), value: 60)
+            }),
+            // Fields 119/139 carry the gesture phase as raw bits (1 began, 2 changed, 4 ended) on trackpad events;
+            // CGEventCreateScrollWheelEvent2 leaves them at 1 for every event.
+            ("S8 baseline + gesture phase in 119/139", { _, _ in }),
+            ("S9 S8 + direction flag 137", { e, _ in e.setIntegerValueField(f(137), value: 1) }),
+            // Realistic deltas from the trackpad's changed events: 175 (accelerated) ≈ -dx/10, 177 (raw) ≈ -1.4·dx,
+            // written as doubles (an integer write to 177 was silently dropped).
+            ("S10 S9 + realistic 175/177 as doubles", { e, dx in
+                e.setIntegerValueField(f(137), value: 1)
+                e.setDoubleValueField(f(175), value: -dx / 10)
+                e.setDoubleValueField(f(177), value: -(dx * 1.4).rounded())
+            }),
+            ("S11 S10 + HID type 6 + sender id", { e, dx in
+                e.setIntegerValueField(f(137), value: 1)
+                e.setDoubleValueField(f(175), value: -dx / 10)
+                e.setDoubleValueField(f(177), value: -(dx * 1.4).rounded())
+                e.setDoubleValueField(f(126), value: Double(Float(bitPattern: 6)))
+                e.setIntegerValueField(f(87), value: 4_294_970_419)
+            }),
+        ]
+        let only = CommandLine.arguments.firstIndex(of: "--from").map { Int(CommandLine.arguments[$0 + 1]) ?? 1 } ?? 1
+        for (label, extra) in variants.dropFirst(only - 1) {
+            let gesturePhase = ["S8", "S9", "S10", "S11"].contains { label.hasPrefix($0 + " ") }
+            func post(_ dx: Double, _ phase: EventSynth.Phase?, _ momentum: EventSynth.MomentumPhase) {
+                guard let e = EventSynth.scroll(dx: dx, dy: 0, at: p, phase: phase, momentum: momentum, window: sink.number, source: source) else { return }
+                extra(e, dx)
+                if gesturePhase {
+                    let bits: UInt32 = switch phase { case .began: 1; case .changed: 2; case .ended: 4; case nil: 0 }
+                    e.setDoubleValueField(f(119), value: Double(Float(bitPattern: bits)))
+                    e.setDoubleValueField(f(139), value: Double(Float(bitPattern: bits)))
+                }
+                target.post(e)
+            }
+            log("posting \(label)")
+            post(2, .began, .none)
+            for _ in 0..<14 { Thread.sleep(forTimeInterval: 0.016); post(18, .changed, .none) }
+            Thread.sleep(forTimeInterval: 0.016); post(0, .ended, .none)
+            for i in 0..<10 { Thread.sleep(forTimeInterval: 0.016); post(40 - Double(i) * 4, nil, i == 0 ? .begin : .continue) }
+            post(0, nil, .end)
+            Thread.sleep(forTimeInterval: 1.2)
         }
         log("done")
     }

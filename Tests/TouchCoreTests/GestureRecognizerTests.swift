@@ -353,3 +353,115 @@ private func isDragEnded(_ action: GestureAction?, near p: PanelPoint) -> Bool {
     s.at(30, moved(0, 0.4, 0.4 + mmY(10)), moved(1, 0.5, 0.4 + mmY(10)))
     #expect(s.actions.isEmpty)
 }
+
+// MARK: four-/five-finger dock swipes and the Notification Center edge swipe
+
+private func fourDown(_ s: inout Script, at y: Double = 0.5, spread: Double = 0.05) {
+    s.at(0, began(0, 0.4, y), began(1, 0.4 + spread, y), began(2, 0.4 + 2 * spread, y))
+    s.at(60, began(3, 0.4 + 3 * spread, y + 0.08))
+}
+
+private func dockSwipes(_ actions: [GestureAction]) -> [(kind: DockSwipeKind, delta: Double, phase: GesturePhase)] {
+    actions.compactMap { if case let .dockSwipe(kind, delta, phase) = $0 { (kind, delta, phase) } else { nil } }
+}
+
+private func moveAll(_ s: inout Script, _ t: UInt64, ids: [UInt8], from start: [(Double, Double)], dx: Double, dy: Double) {
+    let events = zip(ids, start).map { moved($0.0, $0.1.0 + dx, $0.1.1 + dy) }
+    s.recognizer.handle(events, atNs: t * ms).forEach { s.actions.append($0) }
+}
+
+private let fourStart: [(Double, Double)] = [(0.4, 0.5), (0.45, 0.5), (0.5, 0.5), (0.55, 0.58)]
+
+@Test func fourFingersSwipingUpOpenMissionControl() {
+    var s = Script()
+    fourDown(&s)
+    moveAll(&s, 100, ids: [0, 1, 2, 3], from: fourStart, dx: 0, dy: -mmY(10))
+    moveAll(&s, 120, ids: [0, 1, 2, 3], from: fourStart, dx: 0, dy: -mmY(20))
+    s.at(140, ended(0, 0.4, 0.5 - mmY(20)))
+    let swipes = dockSwipes(s.actions)
+    #expect(swipes.first?.kind == .vertical && swipes.first?.phase == .began)
+    #expect(swipes.filter { $0.phase != .ended }.allSatisfy { $0.delta > 0 }, "up = positive = Mission Control")
+    #expect(swipes.last?.phase == .ended)
+}
+
+@Test func fourFingersSwipingDownOpenAppExpose() {
+    var s = Script()
+    fourDown(&s)
+    moveAll(&s, 100, ids: [0, 1, 2, 3], from: fourStart, dx: 0, dy: mmY(15))
+    let swipes = dockSwipes(s.actions)
+    #expect(swipes.first?.kind == .vertical)
+    #expect((swipes.first?.delta ?? 0) < 0)
+}
+
+@Test func fourFingersSwipingLeftMoveToTheSpaceOnTheRight() {
+    var s = Script()
+    fourDown(&s)
+    moveAll(&s, 100, ids: [0, 1, 2, 3], from: fourStart, dx: -mmX(15), dy: 0)
+    let swipes = dockSwipes(s.actions)
+    #expect(swipes.first?.kind == .horizontal)
+    #expect((swipes.first?.delta ?? 0) > 0, "content follows the fingers: left = next Space on the right")
+}
+
+@Test func thumbAndFingersPinchingInOpenLaunchpad() {
+    var s = Script()
+    fourDown(&s, spread: 0.08)
+    // Fingers move toward their centre (about 0.52, 0.52) by 40 %.
+    let start: [(Double, Double)] = [(0.4, 0.5), (0.48, 0.5), (0.56, 0.5), (0.64, 0.58)]
+    let centre = (x: start.map(\.0).reduce(0, +) / 4, y: start.map(\.1).reduce(0, +) / 4)
+    let events = zip([UInt8(0), 1, 2, 3], start).map { moved($0.0, $0.1.0 + (centre.x - $0.1.0) * 0.4, $0.1.1 + (centre.y - $0.1.1) * 0.4) }
+    s.actions += s.recognizer.handle(events, atNs: 100 * ms)
+    let swipes = dockSwipes(s.actions)
+    #expect(swipes.first?.kind == .pinch)
+    #expect((swipes.first?.delta ?? 0) > 0, "pinch in = positive = Launchpad")
+}
+
+@Test func withMissionControlSwipeOffFourFingersDoNothingVertically() {
+    var s = Script { $0.fourFingerVerticalSwipe = false }
+    fourDown(&s)
+    moveAll(&s, 100, ids: [0, 1, 2, 3], from: fourStart, dx: 0, dy: -mmY(20))
+    #expect(dockSwipes(s.actions).isEmpty)
+}
+
+@Test func aSixthFingerCancelsADockSwipe() {
+    var s = Script()
+    fourDown(&s)
+    moveAll(&s, 100, ids: [0, 1, 2, 3], from: fourStart, dx: 0, dy: -mmY(15))
+    s.at(120, began(4, 0.2, 0.2), began(5, 0.25, 0.2))
+    #expect(s.actions.last == .dockSwipeCancelled(.vertical), "a palm must not complete Mission Control")
+}
+
+@Test func twoFingersFromTheRightEdgeMovingLeftOpenNotificationCenter() {
+    var s = Script()
+    s.at(0, began(0, 0.99, 0.4), began(1, 0.995, 0.5))
+    s.at(40, moved(0, 0.99 - mmX(15), 0.4), moved(1, 0.995 - mmX(15), 0.5))
+    s.at(60, moved(0, 0.99 - mmX(25), 0.4), moved(1, 0.995 - mmX(25), 0.5))
+    #expect(s.actions == [.notificationCenter])
+}
+
+@Test func withTheEdgeSwipeOffTwoFingersAtTheEdgeScroll() {
+    var s = Script { $0.notificationCenterSwipe = false }
+    s.at(0, began(0, 0.99, 0.4), began(1, 0.995, 0.5))
+    s.at(40, moved(0, 0.99 - mmX(15), 0.4), moved(1, 0.995 - mmX(15), 0.5))
+    guard case .scroll(_, _, .began) = s.actions.first else { Issue.record("expected a scroll, got \(s.actions)"); return }
+}
+
+// A hand settling: four contacts, one slides far, the others barely move. Must not open Mission Control.
+@Test func aHandSettlingDoesNotTriggerASystemGesture() {
+    var s = Script()
+    fourDown(&s)
+    s.at(100, moved(0, 0.4, 0.5 - mmY(40)), moved(1, 0.45, 0.5 - mmY(1)), moved(2, 0.5, 0.5), moved(3, 0.55, 0.58 + mmY(1)))
+    s.at(140, moved(0, 0.4, 0.5 - mmY(48)))
+    #expect(dockSwipes(s.actions).isEmpty)
+}
+
+// Owner report: Notification Center was hard to trigger. Real attempts: fingers stacked vertically a little
+// inside the edge, moving left unevenly, ended up as rotate or scroll.
+@Test func anUnevenEdgeSwipeStartingAFewMillimetresInStillOpensNotificationCenter() {
+    var s = Script()
+    let x = 1 - mmX(10)   // 10 mm in from the right edge
+    s.at(0, began(0, x, 0.40), began(1, x, 0.47))
+    s.at(40, moved(0, x - mmX(9), 0.40), moved(1, x - mmX(4), 0.47))
+    s.at(70, moved(0, x - mmX(16), 0.40), moved(1, x - mmX(9), 0.47))
+    #expect(s.actions.contains(.notificationCenter))
+    #expect(!s.actions.contains { if case .rotate = $0 { true } else { false } })
+}

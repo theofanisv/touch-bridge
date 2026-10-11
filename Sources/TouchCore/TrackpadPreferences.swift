@@ -52,11 +52,17 @@ public struct TrackpadPreferences: Equatable, Sendable {
         config.scrollEnabled = scroll
         config.pinchEnabled = pinch
         config.rotateEnabled = rotate
+        config.fourFingerVerticalSwipe = missionControlSwipe
+        config.fourFingerHorizontalSwipe = spacesSwipe
+        config.fourFingerPinch = launchpadDesktopPinch
+        config.notificationCenterSwipe = notificationCenterSwipe
     }
 
     /// One line for the menu and the log.
     public var summary: String {
-        [("3-finger drag", threeFingerDrag), ("scroll", scroll), ("momentum", momentum), ("pinch", pinch), ("rotate", rotate)]
+        [("3-finger drag", threeFingerDrag), ("scroll", scroll), ("momentum", momentum), ("pinch", pinch), ("rotate", rotate),
+         ("Mission Control", missionControlSwipe), ("Spaces", spacesSwipe), ("Launchpad/Desktop", launchpadDesktopPinch),
+         ("Notification Center", notificationCenterSwipe)]
             .map { "\($0.0) \($0.1 ? "on" : "off")" }.joined(separator: " · ")
     }
 }

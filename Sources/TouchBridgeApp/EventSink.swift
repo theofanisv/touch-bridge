@@ -40,13 +40,23 @@ final class EventSink: NSObject, NSApplicationDelegate {
             guard !noise.contains(event.type) else { return event }
             let tag = event.cgEvent?.getIntegerValueField(.eventSourceUserData) == 0x5442_4752 ? " TOUCHBRIDGE" : ""
             var fields = ""
-            if event.type == .leftMouseDown, let cg = event.cgEvent {
-                // Every non-zero integer field, to diff a window-server-routed click against a Direct one.
+            // Raw fields of mouse-downs, the first and last event of each scroll gesture, and gesture events,
+            // to diff window-server-routed events against TouchBridge's.
+            let scrollEdge = event.type == .scrollWheel && (event.phase == .began || event.phase == .ended || event.momentumPhase == .began)
+            let gesture = [.gesture, .beginGesture, .endGesture, .swipe].contains(event.type)
+            if event.type == .leftMouseDown || scrollEdge || gesture, let cg = event.cgEvent {
                 fields = " fields:" + (0..<256).compactMap { i -> String? in
                     guard let field = CGEventField(rawValue: UInt32(i)) else { return nil }
-                    let value = cg.getIntegerValueField(field)
-                    return value == 0 ? nil : " \(i)=\(value)"
+                    let int = cg.getIntegerValueField(field)
+                    let double = cg.getDoubleValueField(field)
+                    if double != 0, double != Double(int) { return String(format: " %d=%.4g", i, double) }
+                    return int == 0 ? nil : " \(i)=\(int)"
                 }.joined()
+            }
+            if event.type == .scrollWheel || gesture {
+                fields = String(format: " phase=%lu momentum=%lu dx=%.1f dy=%.1f precise=%@ inverted=%@",
+                                event.phase.rawValue, event.momentumPhase.rawValue, event.scrollingDeltaX, event.scrollingDeltaY,
+                                event.hasPreciseScrollingDeltas ? "y" : "n", event.isDirectionInvertedFromDevice ? "y" : "n") + fields
             }
             var windowLocation = ""
             if let cg = event.cgEvent, let getter = EventSink.getWindowLocation {
@@ -90,6 +100,19 @@ final class SinkView: NSView {
     override func rightMouseDown(with e: NSEvent) { record(describe("rightMouseDown", e)) }
     override func rightMouseUp(with e: NSEvent) { record(describe("rightMouseUp", e)) }
     override func scrollWheel(with e: NSEvent) {
+        // What Safari/WebKit does for back/forward: start swipe tracking on a horizontal scroll that begins.
+        if e.phase == .began, abs(e.scrollingDeltaX) > abs(e.scrollingDeltaY) {
+            record("SWIPE start? tracking-enabled=\(NSEvent.isSwipeTrackingFromScrollEventsEnabled) dx=\(e.scrollingDeltaX)")
+            if NSEvent.isSwipeTrackingFromScrollEventsEnabled {
+                var reported = 0
+                e.trackSwipeEvent(options: [.lockDirection, .clampGestureAmount], dampenAmountThresholdMin: -1, max: 1) { [weak self] amount, phase, complete, _ in
+                    reported += 1
+                    if reported <= 3 || complete || phase == .ended || phase == .cancelled {
+                        self?.record(String(format: "SWIPE tracking amount=%.2f phase=%lu complete=%@", amount, phase.rawValue, complete ? "y" : "n"))
+                    }
+                }
+            }
+        }
         record(describe("scroll", e) + String(format: " dx=%.1f dy=%.1f precise=%@ phase=%lu momentum=%lu",
                                               e.scrollingDeltaX, e.scrollingDeltaY, e.hasPreciseScrollingDeltas ? "y" : "n",
                                               e.phase.rawValue, e.momentumPhase.rawValue))

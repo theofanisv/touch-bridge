@@ -13,6 +13,16 @@ public struct PanelPoint: Equatable, Sendable {
 
 public enum GesturePhase: Equatable, Sendable { case began, changed, ended }
 
+/// The trackpad's system "dock swipes".
+public enum DockSwipeKind: Equatable, Sendable {
+    /// Four fingers left/right: Spaces and full-screen apps.
+    case horizontal
+    /// Four fingers up/down: Mission Control / App Exposé.
+    case vertical
+    /// Thumb and three or four fingers pinching in/out: Launchpad / Show Desktop.
+    case pinch
+}
+
 /// What the user did, in panel coordinates. Delivery maps points and deltas onto the display.
 public enum GestureAction: Equatable, Sendable {
     case tap(at: PanelPoint, count: Int)
@@ -29,6 +39,14 @@ public enum GestureAction: Equatable, Sendable {
     case magnify(delta: Double, phase: GesturePhase)
     /// Incremental rotation in degrees, positive = counterclockwise as seen on screen.
     case rotate(degrees: Double, phase: GesturePhase)
+    /// System gesture progress (1.0 ≈ a full swipe). Positive = Mission Control / Space on the right /
+    /// Launchpad; negative = App Exposé / Space on the left / Show Desktop. `.began` carries the progress
+    /// since touch-down; `.ended` lets the system complete or snap back.
+    case dockSwipe(DockSwipeKind, delta: Double, phase: GesturePhase)
+    /// A palm landed mid-swipe: snap the system gesture back.
+    case dockSwipeCancelled(DockSwipeKind)
+    /// Two fingers swiped in from the right edge.
+    case notificationCenter
 }
 
 /// What a one-finger drag does (menu switch).
@@ -59,6 +77,21 @@ public struct GestureConfig: Codable, Equatable, Sendable {
     public var scrollEnabled = true
     public var pinchEnabled = true
     public var rotateEnabled = true
+    /// System gestures that are switched on (trackpad settings).
+    public var fourFingerVerticalSwipe = true
+    public var fourFingerHorizontalSwipe = true
+    public var fourFingerPinch = true
+    public var notificationCenterSwipe = true
+    /// Four or five fingers must all land within this time of the first.
+    public var multiFingerWindowNs: UInt64 = 350_000_000
+    public var maxMultiContacts = 5
+    /// Travel before a four-finger gesture is classified, and how far a full swipe (progress 1.0) is.
+    public var dockSwipeDecisionMm = 8.0
+    public var dockSwipeMmPerUnit = 80.0
+    public var dockPinchMmPerUnit = 40.0
+    /// Two fingers starting this close to the panel's right edge and moving left this far open Notification Center.
+    public var edgeZoneMm = 15.0
+    public var edgeSwipeMm = 10.0
     public var panelWidthMm = 309.3
     public var panelHeightMm = 173.9
     public var tapSlopMm = 3.0
@@ -84,7 +117,7 @@ public struct GestureConfig: Codable, Equatable, Sendable {
 /// Classifies contact events into gestures. Nothing is emitted until a gesture is classified,
 /// so delivery can pick Direct or Warp once per gesture.
 public struct GestureRecognizer: Sendable {
-    private enum Lock: Sendable { case scroll, pinch, rotate }
+    private enum Lock: Sendable { case scroll, pinch, rotate, edge }
 
     private struct TwoFinger: Sendable {
         var ids: (UInt8, UInt8)
@@ -105,10 +138,21 @@ public struct GestureRecognizer: Sendable {
     private struct ThreeFinger: Sendable {
         /// The first finger to land comes first.
         var ids: [UInt8]
+        var firstDownNs: UInt64
         var start: [UInt8: PanelPoint]
         var positions: [UInt8: PanelPoint]
         var dragging = false
         var lastAnchor: PanelPoint
+    }
+
+    private struct MultiFinger: Sendable {
+        var ids: [UInt8]
+        var firstDownNs: UInt64
+        var start: [UInt8: PanelPoint]
+        var positions: [UInt8: PanelPoint]
+        var lock: DockSwipeKind?
+        var lastCentroidMm: (x: Double, y: Double) = (0, 0)
+        var lastSpreadMm = 0.0
     }
 
     private enum State: Sendable {
@@ -119,6 +163,7 @@ public struct GestureRecognizer: Sendable {
         case panning(id: UInt8, last: PanelPoint, samples: [(ns: UInt64, point: PanelPoint)])
         case twoFinger(TwoFinger)
         case threeFinger(ThreeFinger)
+        case multiFinger(MultiFinger)
         /// Waits until every finger has lifted (after a two-finger gesture or a palm).
         case ignoring
     }
@@ -148,11 +193,16 @@ public struct GestureRecognizer: Sendable {
         config.scrollEnabled = true
         config.pinchEnabled = true
         config.rotateEnabled = true
+        config.fourFingerVerticalSwipe = true
+        config.fourFingerHorizontalSwipe = true
+        config.fourFingerPinch = true
+        config.notificationCenterSwipe = true
     }
     private var active: [UInt8: PanelPoint] = [:]
     private var lastTap: (ns: UInt64, at: PanelPoint, count: Int)?
     private var twoFingerMoved = false
     private var threeFingerMoved = false
+    private var multiFingerMoved = false
 
     public init(config: GestureConfig = GestureConfig()) {
         self.config = config
@@ -162,6 +212,7 @@ public struct GestureRecognizer: Sendable {
         var actions: [GestureAction] = []
         twoFingerMoved = false
         threeFingerMoved = false
+        multiFingerMoved = false
         for event in events {
             let point = PanelPoint(x: event.x, y: event.y)
             switch event.phase {
@@ -169,7 +220,11 @@ public struct GestureRecognizer: Sendable {
             case .moved: active[event.id] = point
             case .ended: active[event.id] = nil
             }
-            if active.count > config.maxContacts {
+            if active.count > contactLimit {
+                if event.phase == .began, let multi = startMultiFinger(event, point, now) {
+                    state = .multiFinger(multi)
+                    continue
+                }
                 actions += cancel()
                 continue
             }
@@ -184,6 +239,10 @@ public struct GestureRecognizer: Sendable {
         if threeFingerMoved, case var .threeFinger(t) = state {
             actions += updateThreeFinger(&t)
             state = .threeFinger(t)
+        }
+        if multiFingerMoved, case var .multiFinger(m) = state {
+            actions += updateMultiFinger(&m)
+            state = .multiFinger(m)
         }
         return actions
     }
@@ -253,7 +312,7 @@ public struct GestureRecognizer: Sendable {
                config.threeFingerDrag, now - g.firstDownNs <= config.threeFingerWindowNs,
                let a = g.positions[g.ids.0], let b = g.positions[g.ids.1] {
                 let start = [g.ids.0: a, g.ids.1: b, event.id: point]
-                let three = ThreeFinger(ids: [g.ids.0, g.ids.1, event.id], start: start, positions: start, lastAnchor: point)
+                let three = ThreeFinger(ids: [g.ids.0, g.ids.1, event.id], firstDownNs: g.firstDownNs, start: start, positions: start, lastAnchor: point)
                 state = .threeFinger(three)
                 return []
             }
@@ -278,9 +337,111 @@ public struct GestureRecognizer: Sendable {
             threeFingerMoved = true
             return []
 
+        case var .multiFinger(m):
+            if event.phase == .began {
+                // A fifth finger may still join while nothing has been classified.
+                if m.lock == nil, !m.ids.contains(event.id), now - m.firstDownNs <= config.multiFingerWindowNs {
+                    m.ids.append(event.id)
+                    m.start[event.id] = point
+                    m.positions[event.id] = point
+                    state = .multiFinger(m)
+                }
+                return []
+            }
+            guard m.ids.contains(event.id) else { return [] }
+            if event.phase == .ended {
+                state = active.isEmpty ? .idle : .ignoring
+                return m.lock.map { [.dockSwipe($0, delta: 0, phase: .ended)] } ?? []
+            }
+            m.positions[event.id] = point
+            state = .multiFinger(m)
+            multiFingerMoved = true
+            return []
+
         case .ignoring:
             return []
         }
+    }
+
+    // MARK: four and five fingers (system dock swipes)
+
+    /// More fingers than a one-, two- or three-finger gesture allows; four or five may form a dock swipe.
+    private var contactLimit: Int {
+        if case .multiFinger = state { config.maxMultiContacts } else { config.maxContacts }
+    }
+
+    /// A fourth finger joins three that landed together and haven't started a drag.
+    private func startMultiFinger(_ event: ContactEvent, _ point: PanelPoint, _ now: UInt64) -> MultiFinger? {
+        guard case let .threeFinger(t) = state, !t.dragging, active.count == config.maxContacts + 1,
+              now - t.firstDownNs <= config.multiFingerWindowNs else { return nil }
+        var start = t.positions
+        start[event.id] = point
+        var m = MultiFinger(ids: t.ids + [event.id], firstDownNs: t.firstDownNs, start: start, positions: start)
+        m.lastCentroidMm = centroidMm(start)
+        m.lastSpreadMm = spreadMm(start)
+        return m
+    }
+
+    private func updateMultiFinger(_ m: inout MultiFinger) -> [GestureAction] {
+        let points = m.positions.filter { m.ids.contains($0.key) }
+        let centroid = centroidMm(points)
+        let spread = spreadMm(points)
+        defer { m.lastCentroidMm = centroid; m.lastSpreadMm = spread }
+        guard let kind = m.lock else {
+            let start = m.start.filter { m.ids.contains($0.key) }
+            let c0 = centroidMm(start), s0 = spreadMm(start)
+            let move = (x: centroid.x - c0.x, y: centroid.y - c0.y)
+            let travel = hypot(move.x, move.y)
+            let spreadChange = spread - s0
+            // Coherence: all fingers but one must take part, so a hand settling doesn't trigger anything.
+            let needed = m.ids.count - 1
+            if abs(spreadChange) > config.dockSwipeDecisionMm, abs(spreadChange) > travel {
+                let radial = m.ids.compactMap { id -> Double? in
+                    guard let p = points[id], let p0 = start[id] else { return nil }
+                    let r = hypot(p.x * config.panelWidthMm - centroid.x, p.y * config.panelHeightMm - centroid.y)
+                    let r0 = hypot(p0.x * config.panelWidthMm - c0.x, p0.y * config.panelHeightMm - c0.y)
+                    return r - r0
+                }
+                guard radial.filter({ ($0 < 0) == (spreadChange < 0) && abs($0) >= 2 }).count >= needed else { return [] }
+                guard config.fourFingerPinch else { return [] }
+                m.lock = .pinch
+                return [.dockSwipe(.pinch, delta: -spreadChange / config.dockPinchMmPerUnit, phase: .began)]
+            }
+            guard travel > config.dockSwipeDecisionMm else { return [] }
+            let direction = (x: move.x / travel, y: move.y / travel)
+            let along = m.ids.filter { id in
+                guard let p = points[id], let p0 = start[id] else { return false }
+                let d = (x: (p.x - p0.x) * config.panelWidthMm, y: (p.y - p0.y) * config.panelHeightMm)
+                return d.x * direction.x + d.y * direction.y >= config.dockSwipeDecisionMm / 2
+            }
+            guard along.count >= needed else { return [] }
+            if abs(move.y) >= abs(move.x) {
+                guard config.fourFingerVerticalSwipe else { return [] }
+                m.lock = .vertical
+                return [.dockSwipe(.vertical, delta: -move.y / config.dockSwipeMmPerUnit, phase: .began)]
+            }
+            guard config.fourFingerHorizontalSwipe else { return [] }
+            m.lock = .horizontal
+            return [.dockSwipe(.horizontal, delta: -move.x / config.dockSwipeMmPerUnit, phase: .began)]
+        }
+        let delta: Double = switch kind {
+        case .vertical: -(centroid.y - m.lastCentroidMm.y) / config.dockSwipeMmPerUnit
+        case .horizontal: -(centroid.x - m.lastCentroidMm.x) / config.dockSwipeMmPerUnit
+        case .pinch: -(spread - m.lastSpreadMm) / config.dockPinchMmPerUnit
+        }
+        return delta == 0 ? [] : [.dockSwipe(kind, delta: delta, phase: .changed)]
+    }
+
+    private func centroidMm(_ points: [UInt8: PanelPoint]) -> (x: Double, y: Double) {
+        let c = centroid(points)
+        return (c.x * config.panelWidthMm, c.y * config.panelHeightMm)
+    }
+
+    /// Mean distance of the fingers from their centre, in millimetres.
+    private func spreadMm(_ points: [UInt8: PanelPoint]) -> Double {
+        let c = centroidMm(points)
+        let distances = points.values.map { hypot($0.x * config.panelWidthMm - c.x, $0.y * config.panelHeightMm - c.y) }
+        return distances.reduce(0, +) / Double(max(distances.count, 1))
     }
 
     // MARK: three fingers
@@ -350,6 +511,8 @@ public struct GestureRecognizer: Sendable {
             guard let lock = classify(g, pa, pb) else { return [] }
             g.lock = lock
             switch lock {
+            case .edge:
+                return [.notificationCenter]
             case .scroll:
                 return [.scroll(dx: centroid.x - g.startCentroid.x, dy: centroid.y - g.startCentroid.y, phase: .began)]
             case .pinch:
@@ -363,12 +526,14 @@ public struct GestureRecognizer: Sendable {
             return g.lastDistance > 0 ? [.magnify(delta: distance / g.lastDistance - 1, phase: .changed)] : []
         case .rotate:
             return [.rotate(degrees: counterclockwise(from: g.lastAngle, to: angle), phase: .changed)]
+        case .edge:
+            return []
         }
     }
 
     private func endTwoFinger(_ g: TwoFinger, _ now: UInt64) -> [GestureAction] {
         switch g.lock {
-        case nil: return []
+        case nil, .edge: return []
         case .pinch: return [.magnify(delta: 0, phase: .ended)]
         case .rotate: return [.rotate(degrees: 0, phase: .ended)]
         case .scroll:
@@ -395,6 +560,12 @@ public struct GestureRecognizer: Sendable {
         let tangential = abs(differential.x * uy - differential.y * ux)
 
         let together = min(ma, mb) >= config.parallelMinMm && (da.x * db.x + da.y * db.y) / (ma * mb) > config.parallelMinCosine
+        // Two fingers starting near the right edge and moving mostly left: Notification Center. The fingers
+        // may move unevenly (owner report: stacked fingers were taken for rotate); waits for enough travel.
+        if config.notificationCenterSwipe, common.x < 0, abs(common.x) > 2 * abs(common.y),
+           (1 - (sa.x + sb.x) / 2) * config.panelWidthMm <= config.edgeZoneMm {
+            return abs(common.x) > config.edgeSwipeMm ? .edge : nil
+        }
         if together, hypot(common.x, common.y) > max(radial, tangential) { return config.scrollEnabled ? .scroll : nil }
         if radial >= tangential { return radial >= config.pinchMinMm && config.pinchEnabled ? .pinch : nil }
         return tangential >= config.rotateMinMm && config.rotateEnabled ? .rotate : nil
@@ -415,6 +586,7 @@ public struct GestureRecognizer: Sendable {
         switch state {
         case let .dragging(_, last): actions = [.dragEnded(at: last)]
         case let .threeFinger(t) where t.dragging: actions = [.dragEnded(at: t.lastAnchor)]
+        case let .multiFinger(m) where m.lock != nil: actions = [.dockSwipeCancelled(m.lock!)]
         case .panning: actions = [.scrollEnded(velocityX: 0, velocityY: 0)]
         case let .twoFinger(g) where g.lock == .scroll: actions = [.scrollEnded(velocityX: 0, velocityY: 0)]
         case let .twoFinger(g) where g.lock == .pinch: actions = [.magnify(delta: 0, phase: .ended)]

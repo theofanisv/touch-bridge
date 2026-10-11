@@ -13,6 +13,8 @@ struct StoredSettings: Sendable {
     var threeFingerAnchor: ThreeFingerAnchor = .centroid
     /// While on, the trackpad's settings decide three-finger drag, scroll, pinch, rotate and momentum.
     var followTrackpad = true
+    /// Launchpad opens on the display with the Dock: what a pinch-in on the touch display does about it.
+    var launchpadDock: LaunchpadDockMode = .bringDockAndReturn
 
     private static var defaults: UserDefaults { .standard }
 
@@ -25,6 +27,7 @@ struct StoredSettings: Sendable {
         s.returnFocus = d.object(forKey: "returnFocus") as? Bool ?? false
         s.threeFingerAnchor = d.string(forKey: "threeFingerAnchor").flatMap(ThreeFingerAnchor.init(rawValue:)) ?? .centroid
         s.followTrackpad = d.object(forKey: "followTrackpad") as? Bool ?? true
+        s.launchpadDock = d.string(forKey: "launchpadDock").flatMap(LaunchpadDockMode.init(rawValue:)) ?? .bringDockAndReturn
         return s
     }
 
@@ -37,6 +40,7 @@ struct StoredSettings: Sendable {
         d.set(threeFingerDrag, forKey: "threeFingerDrag")
         d.set(threeFingerAnchor.rawValue, forKey: "threeFingerAnchor")
         d.set(followTrackpad, forKey: "followTrackpad")
+        d.set(launchpadDock.rawValue, forKey: "launchpadDock")
     }
 
     func apply(to p: inout PipelineSettings, trackpad: TrackpadPreferences) {
@@ -51,6 +55,7 @@ struct StoredSettings: Sendable {
         p.focus = returnFocus ? .returnToPrevious : .followTouch
         p.threeFingerDrag = threeFingerDrag
         p.threeFingerAnchor = threeFingerAnchor
+        p.launchpadDock = launchpadDock
     }
 
     /// The trackpad's "Three-finger drag" setting (System Settings → Accessibility → Pointer Control),
