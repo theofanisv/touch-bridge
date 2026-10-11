@@ -380,6 +380,58 @@ private struct Script {
     #expect(s.actions == [.tap(at: PanelPoint(x: 0.3, y: 0.5), count: 1)])
 }
 
+// MARK: drawing mode (owner's choice 2026-10-11: one finger is a pen, nothing else counts)
+// Strokes go through the window server (hold: true = Warp): delivered straight to the app (Direct), no mouse
+// button is pressed system-wide, and canvases took the movement for hovering (owner test: nothing drew).
+
+@Test func inDrawingModeTheFirstFingerDrawsFromTouchDown() {
+    var s = Script { $0.drawingMode = true }
+    s.at(0, began(0, 0.3, 0.5))
+    #expect(s.actions == [.dragBegan(at: PanelPoint(x: 0.3, y: 0.5), hold: true)], "the stroke starts at touch-down")
+    s.at(16, moved(0, 0.31, 0.5))
+    s.at(32, ended(0, 0.32, 0.5))
+    #expect(Array(s.actions.suffix(2)) == [.dragMoved(to: PanelPoint(x: 0.31, y: 0.5)), .dragEnded(at: PanelPoint(x: 0.32, y: 0.5))])
+}
+
+@Test func inDrawingModeATapIsADot() {
+    var s = Script { $0.drawingMode = true }
+    s.at(0, began(0, 0.3, 0.5))
+    s.at(60, ended(0, 0.3, 0.5))
+    #expect(s.actions == [.dragBegan(at: PanelPoint(x: 0.3, y: 0.5), hold: true), .dragEnded(at: PanelPoint(x: 0.3, y: 0.5))])
+}
+
+@Test func inDrawingModeAPalmAndOtherFingersAreIgnored() {
+    var s = Script { $0.drawingMode = true }
+    s.at(0, began(0, 0.3, 0.5))
+    s.at(20, began(1, 0.6, 0.8), began(2, 0.62, 0.8), began(3, 0.64, 0.8), began(4, 0.66, 0.8), began(5, 0.68, 0.8), began(6, 0.7, 0.8))
+    s.at(40, moved(0, 0.35, 0.5), moved(1, 0.6, 0.85), moved(2, 0.62, 0.85))
+    s.at(60, ended(0, 0.35, 0.5))
+    #expect(s.actions == [.dragBegan(at: PanelPoint(x: 0.3, y: 0.5), hold: true),
+                          .dragMoved(to: PanelPoint(x: 0.35, y: 0.5)),
+                          .dragEnded(at: PanelPoint(x: 0.35, y: 0.5))], "a palm doesn't cancel the stroke")
+}
+
+@Test func inDrawingModeNoGestureIsRecognized() {
+    var s = Script { $0.drawingMode = true }
+    s.at(0, began(0, 0.4, 0.4), began(1, 0.5, 0.4), began(2, 0.6, 0.4), began(3, 0.7, 0.4))
+    s.at(30, moved(0, 0.4, 0.4 + mmY(12)), moved(1, 0.5, 0.4 + mmY(12)), moved(2, 0.6, 0.4 + mmY(12)), moved(3, 0.7, 0.4 + mmY(12)))
+    s.at(60, ended(0, 0.4, 0.4 + mmY(12)), ended(1, 0.5, 0.4 + mmY(12)), ended(2, 0.6, 0.4 + mmY(12)), ended(3, 0.7, 0.4 + mmY(12)))
+    #expect(s.actions.allSatisfy { action in
+        switch action { case .dragBegan, .dragMoved, .dragEnded: true; default: false }
+    }, "only the pen's stroke: no scroll, pinch, swipe or palm cancel")
+}
+
+@Test func afterThePenLiftsTheNextNewFingerDraws() {
+    var s = Script { $0.drawingMode = true }
+    s.at(0, began(0, 0.3, 0.5))
+    s.at(10, began(1, 0.7, 0.5))   // resting
+    s.at(20, ended(0, 0.3, 0.5))
+    s.at(40, moved(1, 0.72, 0.5))  // never the pen: still ignored
+    s.at(60, began(2, 0.2, 0.2))
+    #expect(s.actions.last == .dragBegan(at: PanelPoint(x: 0.2, y: 0.2), hold: true))
+    #expect(!s.actions.contains(.dragMoved(to: PanelPoint(x: 0.72, y: 0.5))))
+}
+
 // Centroids of three coordinates can differ from the exact value in the last binary digit.
 private func near(_ a: PanelPoint, _ b: PanelPoint) -> Bool { abs(a.x - b.x) < 1e-9 && abs(a.y - b.y) < 1e-9 }
 private func isDragBegan(_ action: GestureAction?, near p: PanelPoint, hold: Bool) -> Bool {

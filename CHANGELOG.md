@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.0 (2026-10-11)
+
+- **Touch Mode menu** (✋ → Touch Mode). It resets to Gestures at each start, and the menu-bar icon shows a special mode.
+  - **Drawing** (✏️): the first finger is a pen, from touch-down to lift. Every other finger, a resting palm and every gesture are ignored. Strokes go through the window server, so drawing apps and websites see a real mouse press.
+  - **Multitouch Apps** (🖐): every finger, up to ten, as TUIO 1.1 over UDP to `127.0.0.1:3333`, for TUIO apps such as TouchDesigner, Processing, openFrameworks, Unity, Max or Kivy. Nothing is delivered to macOS in this mode.
+- **Event Sink as a multitouch test canvas:** it reads TUIO and paints every finger in its own colour, plus the mouse stroke in grey, with a live finger count and a Clear button.
+- The README explains what macOS allows: ordinary apps, web pages and iPhone/iPad apps get a single pointer, so more fingers reach only apps that read a multitouch protocol such as TUIO.
+
 ## 1.0.0 (2026-10-11)
 
 The first stable release. On the tested setup (an ARZOPA touch monitor with an ILITEK controller, macOS 15), the touch display behaves like a touchscreen with a trackpad built in:

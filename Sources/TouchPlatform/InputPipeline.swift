@@ -23,6 +23,8 @@ public struct PipelineSettings: Sendable {
     /// Two-finger scrolls carry the trackpad's gesture stream, so Safari's back/forward page swipe (and other
     /// apps' trackpad swipes) follow the fingers.
     public var swipeBetweenPages = true
+    /// Gestures (default), drawing (one finger is a pen), or multitouch (every finger as TUIO, nothing else).
+    public var inputMode: InputMode = .gestures
     public var displayVendor: UInt32 = 7908
     public var displayModel: UInt32 = 342
 
@@ -74,6 +76,12 @@ public final class InputPipeline: @unchecked Sendable {
     private var dockReturnTimer: DispatchSourceTimer?
     /// Between start() and stop(): only a running pipeline moves the Dock.
     private var running = false
+    /// The touch mode in effect (a change ends whatever is under way first).
+    private var activeInputMode: InputMode = .gestures
+    private lazy var tuio = TUIOSender()
+    private var tuioSessions = TUIOSessions()
+    private var tuioSequence: Int32 = 0
+    private var tuioIdleTicks = 0
     /// The app that had focus on another display when a Space switch began on the touch display.
     private var focusBeforeSwitch: pid_t?
     /// Watching for macOS to move focus after that switch; a new touch cancels it.
@@ -96,7 +104,31 @@ public final class InputPipeline: @unchecked Sendable {
             deliverer.focusMode = settings.focus
             applyGestureSettings(to: &recognizer)
             refreshDisplay()
+            if settings.inputMode != activeInputMode { switchInputMode(to: settings.inputMode) }
         }
+    }
+
+    /// Ends a gesture or stroke under way, tells TUIO apps every finger is gone when leaving multitouch, and
+    /// starts the new mode with a fresh recognizer.
+    private func switchInputMode(to mode: InputMode) {
+        deliverer.abortGesture()
+        if activeInputMode == .multitouch { sendTUIO([:], atNs: DispatchTime.now().uptimeNanoseconds) }
+        activeInputMode = mode
+        resetGestureState()
+        tuioSessions = TUIOSessions()
+        switch mode {
+        case .gestures: status("touch mode: gestures")
+        case .drawing: status("touch mode: drawing (the first finger draws, nothing else)")
+        case .multitouch: status("touch mode: multitouch (every finger as TUIO to 127.0.0.1:\(TUIOSender.port), nothing else)")
+        }
+    }
+
+    /// One TUIO frame with every finger on the panel (none: tells apps they've all lifted).
+    private func sendTUIO(_ fingers: [UInt8: PanelPoint], atNs now: UInt64) {
+        let cursors = tuioSessions.update(fingers, atNs: now)
+        tuioSequence = tuioSequence == Int32.max ? 1 : tuioSequence + 1
+        guard !settings.dryRun else { return }
+        tuio.send(TUIO.frame(cursors, sequence: tuioSequence))
     }
 
     /// "Then back" chosen in the menu (even if it already was): a Dock found on the touch display goes home.
@@ -142,6 +174,7 @@ public final class InputPipeline: @unchecked Sendable {
         recognizer.oneFingerDrag = settings.oneFingerDrag
         recognizer.threeFingerDrag = settings.threeFingerDrag
         recognizer.threeFingerAnchor = settings.threeFingerAnchor
+        recognizer.drawingMode = settings.inputMode == .drawing
         if let trackpad = settings.trackpad {
             recognizer.apply(trackpad)
             deliverer.momentumEnabled = trackpad.momentum
@@ -195,6 +228,11 @@ public final class InputPipeline: @unchecked Sendable {
             guard let self else { return }
             let now = Self.nanoseconds(mach_absolute_time())
             process(tracker.expire(atNs: now), now: now)
+            // TUIO clients expect a frame now and then even while nothing touches (once a second).
+            if activeInputMode == .multitouch, contacts.isEmpty {
+                tuioIdleTicks += 1
+                if tuioIdleTicks >= 20 { tuioIdleTicks = 0; sendTUIO([:], atNs: now) }
+            }
         }
         expireTimer = timer
         timer.resume()
@@ -219,6 +257,11 @@ public final class InputPipeline: @unchecked Sendable {
             touchCount = contacts.count
             maxTouchCount = max(maxTouchCount, touchCount)
             onTouchCount?(touchCount, maxTouchCount)
+        }
+        if activeInputMode == .multitouch {
+            // Every finger goes to multitouch apps; nothing reaches macOS as clicks or gestures.
+            sendTUIO(contacts, atNs: now)
+            return
         }
         for action in recognizer.handle(events, atNs: now) {
             route(action)

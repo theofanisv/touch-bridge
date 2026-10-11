@@ -15,6 +15,7 @@ TouchBridge is a small menu-bar app that runs in user space:
 - [Why](#why)
 - [Features](#features)
 - [Gestures](#gestures)
+- [Drawing and multitouch apps](#drawing-and-multitouch-apps)
 - [Hardware support](#hardware-support)
 - [Requirements](#requirements)
 - [Install](#install)
@@ -48,7 +49,8 @@ Commercial drivers exist. TouchBridge is a free, user-space alternative. Its goa
   - starts at login and restarts after a crash;
   - recovers after unplugging and sleep;
   - can't leave a mouse button stuck, even across a crash.
-- **Tracks up to 10 fingers.** Gestures use up to five.
+- **Touch modes for drawing and multitouch apps**: a Drawing mode, where one finger draws and nothing else gets in the way, and a Multitouch mode that sends all ten fingers to apps that read TUIO.
+- **Tracks up to 10 fingers.** Gestures use up to five; Multitouch mode passes on all ten.
 
 ## Gestures
 
@@ -77,6 +79,44 @@ Commercial drivers exist. TouchBridge is a free, user-space alternative. Its goa
 - **Focus after a Space switch.** macOS moves focus to the switched display. TouchBridge gives it back to the app you were using on the other screen; you can turn this off.
 
 **Trackpad settings.** With "Follow Trackpad Settings" on (the default), each gesture follows its switch in System Settings → Trackpad: three-finger drag, scrolling, momentum, pinch, rotate, Mission Control, Spaces, Launchpad/Desktop and Notification Center.
+
+## Drawing and multitouch apps
+
+**What macOS allows.** macOS has no touchscreen input layer, unlike Windows, iOS and Android. As a result:
+- **Apps get one mouse pointer.** That's all an ordinary app can receive.
+- **Browsers on a Mac never produce touch events**, so web pages only ever see the mouse.
+- **iPhone and iPad apps running on a Mac** get a single touch made from the pointer.
+
+So more than one finger can only reach apps that read a multitouch protocol themselves. TUIO is the standard one: an open protocol from the multitouch-table community, used in creative coding, interactive installations and DIY touch tables.
+
+**The ✋ → Touch Mode menu** picks what touches do. It goes back to Gestures every time TouchBridge starts, so a special mode can't be left on by accident.
+
+| Touch Mode | Icon | What touches do |
+|---|---|---|
+| Gestures (default) | ✋ | Everything in [Gestures](#gestures) |
+| Drawing: One Finger Draws, Nothing Else | ✏️ | The first finger is a pen; every other finger and every gesture is ignored |
+| Multitouch Apps: All Fingers as TUIO | 🖐 | Every finger goes to TUIO apps; nothing reaches macOS |
+
+**Drawing mode** suits drawing apps and websites, signature boxes and whiteboards:
+- The first finger to touch is a pen: it presses the mouse at touch-down (so a tap makes a dot), drags while it moves, and releases at lift.
+- Strokes go through the window server like a real mouse. Canvases check that a mouse button is really pressed while the pointer moves.
+- Every other finger, including a palm resting on the screen, is ignored, and so is every gesture.
+- When the pen lifts, the next finger to touch draws.
+
+**Multitouch Apps mode** sends every finger, up to ten, as TUIO 1.1 ("2Dcur" cursors) over UDP to `127.0.0.1:3333`. That's the default port of TUIO apps such as TouchDesigner, Processing, openFrameworks, Unity, Max and Kivy.
+- Nothing reaches macOS: no clicks and no gestures, so four fingers in your TUIO app won't open Mission Control. Use the trackpad for everything else while this mode is on.
+- While nothing touches, TouchBridge sends a frame once a second, as TUIO apps expect.
+
+**Testing.** ✋ → Open Event Sink opens a test window that paints touches:
+- in Multitouch mode, every finger in its own colour, marked with its touch number while it's down;
+- in Drawing mode, the mouse stroke in grey, which is exactly what an ordinary app receives.
+
+The top line shows fingers now and the most at once. Clear wipes the canvas.
+
+**What won't work, and why.**
+- **Touch-only web pages** do nothing at all on a Mac, not even with one finger. These are pages that listen only for touch events, such as many online multitouch testers. The browser never produces those events.
+- **Most drawing websites draw one stroke at a time**, even on a tablet. AutoDraw, for example, reads only the first touch.
+- **Multi-finger drawing in ordinary apps isn't possible.** They get one mouse.
 
 ## Hardware support
 
@@ -146,6 +186,7 @@ TouchBridge lives in the menu bar as ✋. Settings are saved across restarts, ex
 |---|---|
 | Status lines | Panel connection, touch display, the last gesture and how it was delivered, and how many fingers are down |
 | Enabled | Turns touch handling on or off. Off hands the panel back to macOS. |
+| Touch Mode | Gestures (default), Drawing (one finger draws, nothing else), or Multitouch Apps (all fingers as TUIO, nothing to macOS). Resets to Gestures at each start. See [Drawing and multitouch apps](#drawing-and-multitouch-apps). |
 | Delivery | Automatic (default) picks Direct or Warp per gesture (see [How it works](#how-it-works)). "Direct only" and "Warp only" are for testing how an app copes. |
 | Pinch & Rotate Direct | Sends pinch and rotate straight to the app (default). Off routes them through the window server instead. |
 | One-Finger Drag Scrolls | On (default): one finger scrolls, and holding first then dragging is click-and-drag. Off: one finger drags. |
@@ -158,7 +199,7 @@ TouchBridge lives in the menu bar as ✋. Settings are saved across restarts, ex
 | Keep Focus When Switching Spaces | After a Space switch on the touch display, gives focus back to the app on the other screen (default on) |
 | Dry Run (log only) | Recognizes gestures and logs them without sending anything |
 | Start at Login | Runs TouchBridge at login and restarts it if it crashes. Quit from the menu stays quit until the next login. |
-| Open Event Sink | A test window on the touch display that logs every event it receives |
+| Open Event Sink | A test window on the touch display. It logs every event it receives and paints touches: TUIO fingers in colour, the mouse in grey. |
 | Open Logs Folder | Opens `~/Library/Logs/TouchBridge/` |
 
 ## How it works
@@ -189,6 +230,10 @@ touch panel ──HID──▶ ReportParser ─▶ ContactTracker ─▶ Gesture
 - Launchpad follows the Dock.
 
 **Page swipes.** Each two-finger scroll from a real trackpad comes with a second, hidden stream of gesture events: type 29, subtype 61 at the start, subtype 6 for every movement, subtype 62 at the end. AppKit's swipe tracking (behind Safari's back/forward swipe) measures progress from that stream, not from the scroll events. TouchBridge sends the stream with two-finger scrolls, so apps animate the swipe natively.
+
+**Touch modes.**
+- **Drawing:** a separate path in `GestureRecognizer`. The first finger becomes a pen, delivered as a Warp drag so the mouse button is really down system-wide. Everything else is dropped.
+- **Multitouch Apps:** gesture recognition is skipped entirely. Each frame of contacts becomes a TUIO bundle: `TUIOSessions` gives every touch its own session id and a velocity, and `TUIO.frame` builds the OSC bytes, sent over UDP.
 
 **Staying reliable.**
 - **Multitouch mode:** after unplugging or sleep, the panel starts in a single-touch "mouse" mode. TouchBridge switches it back to multitouch when it connects, and again whenever mouse-mode reports appear.
@@ -250,7 +295,7 @@ Diagnostic modes run on the development build (`build/TouchBridge.app`, made by 
 |---|---|
 | `--probe 90` † | Records raw panel reports for 90 s |
 | `--dry-run` † | Recognizes and logs gestures without sending anything |
-| `--event-sink` | Opens the Event Sink test window, which logs every event it receives, including those AppKit's swipe tracker takes first |
+| `--event-sink` | Opens the Event Sink test window. It logs every event it receives, including those AppKit's swipe tracker takes first, and paints TUIO fingers (listening on port 3333) and mouse strokes. |
 | `--direct-selftest` | Posts test events to the Event Sink only (`--swipe` adds the page-swipe variants) |
 | `--ax-probe --map` | Read-only map of the window-drag areas on screen |
 | `--ax-probe --menubar` | Read-only report: displays, menu bars and clocks, active menu-bar display, current Spaces, the Dock |
@@ -279,6 +324,12 @@ Add `-g` after `open` to keep a diagnostic run in the background.
 - Chromium/Electron apps already use Warp automatically.
 
 **Page swipes don't work in an app.** The app must support trackpad page swipes, and "Swipe between pages" must be on in System Settings → Trackpad → More Gestures.
+
+**Gestures get in the way of drawing.** Use ✋ → Touch Mode → Drawing: one finger draws, and every other finger and gesture is ignored.
+
+**Multitouch mode does nothing in my apps.** That's by design. In Multitouch mode fingers go only to apps that read TUIO, and nothing is delivered to macOS. Ordinary apps, web pages, and iPhone or iPad apps can't receive more than one finger on a Mac. Use the Event Sink to check that the fingers arrive.
+
+**A web page ignores touches completely.** It probably listens only for touch events, which browsers on a Mac never produce. TouchBridge reaches web pages as a mouse.
 
 ## Uninstall
 

@@ -27,7 +27,8 @@ public enum DockSwipeKind: Equatable, Sendable {
 public enum GestureAction: Equatable, Sendable {
     case tap(at: PanelPoint, count: Int)
     case rightClick(at: PanelPoint)
-    /// `hold` is true when the finger rested before moving (drag-and-drop), which always uses Warp delivery.
+    /// `hold` is true when the drag must go through the window server (Warp delivery), with the mouse button
+    /// pressed system-wide: drag-and-drop after a hold, and drawing strokes.
     case dragBegan(at: PanelPoint, hold: Bool)
     case dragMoved(to: PanelPoint)
     case dragEnded(at: PanelPoint)
@@ -57,6 +58,16 @@ public enum OneFingerDragMode: String, Codable, Equatable, Sendable {
     case clickAndDrag
 }
 
+/// What touches do (menu "Touch Mode", per session).
+public enum InputMode: String, Codable, Equatable, Sendable {
+    /// Taps, scrolling, pinch, system gestures and the rest (the default).
+    case gestures
+    /// One finger is a pen: mouse down at touch-down, drag, up at lift. Other fingers and gestures are ignored.
+    case drawing
+    /// Every finger goes out as TUIO for multitouch apps; nothing is delivered to macOS.
+    case multitouch
+}
+
 /// Where a three-finger drag grabs (menu setting).
 public enum ThreeFingerAnchor: String, Codable, Equatable, Sendable {
     /// The middle of the three fingers.
@@ -71,6 +82,8 @@ public struct GestureConfig: Codable, Equatable, Sendable {
     /// Three fingers moving together = click-and-drag, like the trackpad's "Three-finger drag".
     public var threeFingerDrag = true
     public var threeFingerAnchor: ThreeFingerAnchor = .centroid
+    /// Drawing mode (see `InputMode.drawing`): the first finger draws, nothing else is recognized.
+    public var drawingMode = false
     /// The third finger must land within this time of the first.
     public var threeFingerWindowNs: UInt64 = 250_000_000
     /// "Rest a finger, add two": two fingers joining a still first finger within this time start a
@@ -191,6 +204,10 @@ public struct GestureRecognizer: Sendable {
         get { config.threeFingerAnchor }
         set { config.threeFingerAnchor = newValue }
     }
+    public var drawingMode: Bool {
+        get { config.drawingMode }
+        set { config.drawingMode = newValue }
+    }
     /// Follow the trackpad's gesture switches (three-finger drag, scroll, pinch, rotate).
     public mutating func apply(_ trackpad: TrackpadPreferences) {
         trackpad.apply(to: &config)
@@ -208,6 +225,8 @@ public struct GestureRecognizer: Sendable {
     /// Fingers that joined a resting first finger after the two-finger window (see `restingDragWindowNs`).
     private var restingExtras: [UInt8: PanelPoint] = [:]
     private var lastTap: (ns: UInt64, at: PanelPoint, count: Int)?
+    /// Drawing mode: the finger that draws, and where it last was.
+    private var pen: (id: UInt8, last: PanelPoint)?
     private var twoFingerMoved = false
     private var threeFingerMoved = false
     private var multiFingerMoved = false
@@ -217,6 +236,7 @@ public struct GestureRecognizer: Sendable {
     }
 
     public mutating func handle(_ events: [ContactEvent], atNs now: UInt64) -> [GestureAction] {
+        if config.drawingMode { return draw(events) }
         var actions: [GestureAction] = []
         twoFingerMoved = false
         threeFingerMoved = false
@@ -391,6 +411,33 @@ public struct GestureRecognizer: Sendable {
         case .ignoring:
             return []
         }
+    }
+
+    // MARK: drawing mode
+
+    /// The first finger to land is a pen: the stroke starts at touch-down (so a tap is a dot) and ends at lift.
+    /// Every other finger, such as a palm resting on the screen, is ignored, and so is every gesture. When the
+    /// pen lifts, the next finger to land draws.
+    private mutating func draw(_ events: [ContactEvent]) -> [GestureAction] {
+        var actions: [GestureAction] = []
+        for event in events {
+            let point = PanelPoint(x: event.x, y: event.y)
+            switch event.phase {
+            case .began where pen == nil:
+                pen = (event.id, point)
+                // Through the window server, like a real mouse: canvases check that a button is really down.
+                actions.append(.dragBegan(at: point, hold: true))
+            case .moved where pen?.id == event.id:
+                pen = (event.id, point)
+                actions.append(.dragMoved(to: point))
+            case .ended where pen?.id == event.id:
+                pen = nil
+                actions.append(.dragEnded(at: point))
+            default:
+                break
+            }
+        }
+        return actions
     }
 
     // MARK: four and five fingers (system dock swipes)

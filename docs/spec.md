@@ -239,6 +239,10 @@ Findings from building and testing on the hardware. These override the plan wher
   - **v0.5.2:** Notification Center: press the clock with the hidden cursor on the touch display for 0.8 s (the v0.5.1 click below was replaced). Pinches no longer park the cursor.
   - **Launchpad follows the Dock** (self-test lp-4). The Dock moves to a display when the cursor pushes against its bottom edge, and synthetic mouse-moved events with a downward delta do that.
   - **v0.5.3:** a pinch-in on the touch display brings the Dock there first, as a setting: bring over (default), bring over then back, or leave (`LaunchpadDock`, `DockLocator`, `Deliverer.nudge`).
+  - **v1.1.0 (touch modes):** a per-session Touch Mode menu.
+    - Drawing: a pen path in the recognizer, delivered through Warp so canvases see the button down.
+    - Multitouch Apps: TUIO 1.1 2Dcur over UDP to 127.0.0.1:3333, with no gesture recognition and no delivery to macOS.
+    - The Event Sink reads TUIO and paints every finger. macOS can't give ordinary apps, web pages or iPhone/iPad apps more than one pointer (backlog 7).
   - **v0.6.2 (back/forward, final):** real trackpad page swipes. Two-finger scrolls carry the trackpad's scroll-gesture stream (type 29: subtype 61, then 6 per move, then 62). AppKit's swipe tracking measures progress from it. It was found with a per-process event tap, since the tracker pulls those events before any app-level monitor. It replaces the flick.
   - **v0.6.0 (back/forward):** the animated page swipe can't be synthesized (backlog 5). A quick horizontal two-finger flick sends back/forward to the window under the fingers, only in apps where ⌘[ / ⌘] mean history. There's a menu switch. v0.6.1: it presses the app's ⌘[ / ⌘] menu item through Accessibility, because Safari ignored the shortcut posted to it.
   - **v0.5.9 (three-finger drag):** rest a finger, add two. Two fingers joining a resting first finger within 1.5 s start a three-finger drag that grabs under the resting finger (`restingDragWindowNs`). v0.5.10: at the point where that finger first touched, then following its movement.

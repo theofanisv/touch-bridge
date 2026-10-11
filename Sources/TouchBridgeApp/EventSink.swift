@@ -1,4 +1,5 @@
 import AppKit
+import TouchCore
 import TouchPlatform
 
 /// Test window for the M1 compatibility matrix: shows and logs every event an ordinary app receives,
@@ -6,6 +7,8 @@ import TouchPlatform
 @MainActor
 final class EventSink: NSObject, NSApplicationDelegate {
     private var window: NSWindow!
+    private var sink: SinkView!
+    private var tuioSource: DispatchSourceRead?
     private let log = FileLog(name: "eventsink")
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -17,7 +20,7 @@ final class EventSink: NSObject, NSApplicationDelegate {
         window.title = "TouchBridge Event Sink"
         window.isReleasedWhenClosed = false
 
-        let sink = SinkView(frame: NSRect(x: 0, y: 0, width: 900, height: 540), log: log)
+        sink = SinkView(frame: NSRect(x: 0, y: 0, width: 900, height: 540), log: log, touchScreen: screen)
         sink.autoresizingMask = [.width, .height]
         let button = NSButton(title: "Button", target: sink, action: #selector(SinkView.buttonPressed))
         button.frame = NSRect(x: 16, y: 552, width: 120, height: 32)
@@ -25,13 +28,50 @@ final class EventSink: NSObject, NSApplicationDelegate {
         let field = NSTextField(frame: NSRect(x: 150, y: 556, width: 300, height: 24))
         field.placeholderString = "Text field (tap, then type)"
         field.autoresizingMask = [.minYMargin]
+        let clear = NSButton(title: "Clear", target: sink, action: #selector(SinkView.clear))
+        clear.frame = NSRect(x: 466, y: 552, width: 100, height: 32)
+        clear.autoresizingMask = [.minYMargin]
         let content = NSView(frame: NSRect(x: 0, y: 0, width: 900, height: 600))
-        [sink, button, field].forEach(content.addSubview)
+        [sink, button, field, clear].forEach(content.addSubview)
         window.contentView = content
         window.makeKeyAndOrderFront(nil)
         log.write("— event sink opened on \(screen.localizedName), window \(window.windowNumber), pid \(getpid()) —")
         logEveryEventEnteringTheApp()
         tapEveryEventSentToThisProcess()
+        listenForTUIO()
+    }
+
+    /// Multitouch mode sends every finger as TUIO; listening like any TUIO app lets this window paint them all.
+    private func listenForTUIO() {
+        let fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)
+        guard fd >= 0 else { log.write("TUIO: no socket"); return }
+        var yes: Int32 = 1
+        setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, socklen_t(MemoryLayout<Int32>.size))
+        setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &yes, socklen_t(MemoryLayout<Int32>.size))
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = UInt16(3333).bigEndian
+        address.sin_addr.s_addr = inet_addr("127.0.0.1")
+        let bound = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+        }
+        guard bound == 0 else {
+            log.write("TUIO: port 3333 is in use by another app; Multitouch fingers won't show here")
+            close(fd)
+            return
+        }
+        let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: .main)
+        source.setEventHandler { [weak self] in
+            var buffer = [UInt8](repeating: 0, count: 65_536)
+            let count = recv(fd, &buffer, buffer.count, 0)
+            guard count > 0, let frame = TUIO.decode(Array(buffer.prefix(count))) else { return }
+            MainActor.assumeIsolated { self?.sink.show(frame) }
+        }
+        source.setCancelHandler { close(fd) }
+        source.resume()
+        tuioSource = source
+        log.write("TUIO: listening on 127.0.0.1:3333 (Multitouch mode paints every finger here)")
     }
 
     /// A listen-only tap on every event the window server sends this process, including those that AppKit's
@@ -119,10 +159,77 @@ final class EventSink: NSObject, NSApplicationDelegate {
 final class SinkView: NSView {
     private let log: FileLog
     private var lines: [String] = []
+    /// TUIO positions are fractions of the touch display, wherever this window is.
+    private let touchScreen: NSScreen
 
-    init(frame: NSRect, log: FileLog) {
+    private struct Trail {
+        let color: NSColor
+        var points: [NSPoint]
+    }
+
+    /// Every stroke painted since the last Clear: one per finger (TUIO) and per mouse drag.
+    private var trails: [Trail] = []
+    private var liveTrail: [Int32: Int] = [:]
+    private var liveFingers: [Int32: NSPoint] = [:]
+    private var mouseTrail: Int?
+    private var mostFingers = 0
+    private static let palette: [NSColor] = [.systemRed, .systemOrange, .systemYellow, .systemGreen, .systemMint,
+                                             .systemTeal, .systemBlue, .systemIndigo, .systemPurple, .systemPink]
+
+    init(frame: NSRect, log: FileLog, touchScreen: NSScreen) {
         self.log = log
+        self.touchScreen = touchScreen
         super.init(frame: frame)
+    }
+
+    private static func color(_ session: Int32) -> NSColor {
+        palette[Int(UInt32(bitPattern: session) % UInt32(palette.count))]
+    }
+
+    /// One TUIO frame: extends each finger's trail, ends the trails of fingers that lifted.
+    func show(_ frame: TUIO.Frame) {
+        guard let window else { return }
+        let alive = Set(frame.alive)
+        for session in Array(liveFingers.keys) where !alive.contains(session) {
+            liveFingers[session] = nil
+            liveTrail[session] = nil
+        }
+        let s = touchScreen.frame
+        for cursor in frame.cursors {
+            let onScreen = NSPoint(x: s.minX + CGFloat(cursor.x) * s.width, y: s.maxY - CGFloat(cursor.y) * s.height)
+            let p = convert(window.convertPoint(fromScreen: onScreen), from: nil)
+            liveFingers[cursor.session] = p
+            if let i = liveTrail[cursor.session] {
+                trails[i].points.append(p)
+            } else {
+                liveTrail[cursor.session] = trails.count
+                trails.append(Trail(color: Self.color(cursor.session), points: [p]))
+            }
+        }
+        if liveFingers.count > mostFingers {
+            mostFingers = liveFingers.count
+            log.write("TUIO: \(mostFingers) fingers at once")
+        }
+        needsDisplay = true
+    }
+
+    @objc func clear() {
+        trails.removeAll()
+        liveTrail.removeAll()
+        mouseTrail = nil
+        mostFingers = liveFingers.count
+        needsDisplay = true
+    }
+
+    private func paintMouse(_ e: NSEvent, starting: Bool, ending: Bool) {
+        let p = convert(e.locationInWindow, from: nil)
+        if starting || mouseTrail == nil {
+            mouseTrail = trails.count
+            trails.append(Trail(color: .systemGray, points: [p]))
+        } else if let i = mouseTrail {
+            trails[i].points.append(p)
+        }
+        if ending { mouseTrail = nil }
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -132,9 +239,18 @@ final class SinkView: NSView {
 
     @objc func buttonPressed() { record("BUTTON action fired") }
 
-    override func mouseDown(with e: NSEvent) { record(describe("mouseDown", e) + " clicks=\(e.clickCount)") }
-    override func mouseUp(with e: NSEvent) { record(describe("mouseUp", e) + " clicks=\(e.clickCount)") }
-    override func mouseDragged(with e: NSEvent) { record(describe("mouseDragged", e)) }
+    override func mouseDown(with e: NSEvent) {
+        paintMouse(e, starting: true, ending: false)
+        record(describe("mouseDown", e) + " clicks=\(e.clickCount)")
+    }
+    override func mouseUp(with e: NSEvent) {
+        paintMouse(e, starting: false, ending: true)
+        record(describe("mouseUp", e) + " clicks=\(e.clickCount)")
+    }
+    override func mouseDragged(with e: NSEvent) {
+        paintMouse(e, starting: false, ending: false)
+        record(describe("mouseDragged", e))
+    }
     override func rightMouseDown(with e: NSEvent) { record(describe("rightMouseDown", e)) }
     override func rightMouseUp(with e: NSEvent) { record(describe("rightMouseUp", e)) }
     override func scrollWheel(with e: NSEvent) {
@@ -176,12 +292,32 @@ final class SinkView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         NSColor.textBackgroundColor.setFill()
         bounds.fill()
+        for trail in trails {
+            guard let first = trail.points.first else { continue }
+            let path = NSBezierPath()
+            path.lineWidth = 5
+            path.lineCapStyle = .round
+            path.lineJoinStyle = .round
+            path.move(to: first)
+            if trail.points.count == 1 { path.line(to: first) }   // a tap: a dot
+            for p in trail.points.dropFirst() { path.line(to: p) }
+            trail.color.setStroke()
+            path.stroke()
+        }
+        let label: [NSAttributedString.Key: Any] = [.font: NSFont.boldSystemFont(ofSize: 13), .foregroundColor: NSColor.labelColor]
+        for (session, p) in liveFingers {
+            Self.color(session).withAlphaComponent(0.3).setFill()
+            NSBezierPath(ovalIn: NSRect(x: p.x - 20, y: p.y - 20, width: 40, height: 40)).fill()
+            ("\(session)" as NSString).draw(at: NSPoint(x: p.x - 8, y: p.y - 9), withAttributes: label)
+        }
+        let status = "Fingers now: \(liveFingers.count) · most at once: \(mostFingers)    (Touch Mode → Multitouch paints every finger in colour; Drawing paints the mouse in grey)"
+        (status as NSString).draw(at: NSPoint(x: 12, y: 8), withAttributes: label)
         let attributes: [NSAttributedString.Key: Any] = [
             .font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular),
-            .foregroundColor: NSColor.labelColor,
+            .foregroundColor: NSColor.secondaryLabelColor,
         ]
         for (i, line) in lines.enumerated() {
-            (line as NSString).draw(at: NSPoint(x: 12, y: 8 + CGFloat(i) * 17), withAttributes: attributes)
+            (line as NSString).draw(at: NSPoint(x: 12, y: 30 + CGFloat(i) * 17), withAttributes: attributes)
         }
     }
 }

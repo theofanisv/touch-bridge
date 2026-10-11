@@ -23,6 +23,7 @@ final class MenuBarApp: NSObject, NSApplicationDelegate {
     private var threeFingerItem: NSMenuItem!
     private var anchorItems: [NSMenuItem] = []
     private var launchpadItems: [NSMenuItem] = []
+    private var touchModeItems: [NSMenuItem] = []
     private var stored = StoredSettings.load()
     private var trackpad = TrackpadPreferencesReader.read()
     private var followTrackpadItem: NSMenuItem!
@@ -101,6 +102,21 @@ final class MenuBarApp: NSObject, NSApplicationDelegate {
         }
         menu.addItem(.separator())
         enabledItem = item(menu, "Enabled", #selector(toggleEnabled))
+        // Per session: every start is back in Gestures, so the panel can't stay stuck in a special mode.
+        let touchModeMenu = NSMenu()
+        for (title, mode) in [("Gestures", InputMode.gestures),
+                              ("Drawing: One Finger Draws, Nothing Else", .drawing),
+                              ("Multitouch Apps: All Fingers as TUIO (port 3333)", .multitouch)] {
+            let entry = NSMenuItem(title: title, action: #selector(chooseTouchMode(_:)), keyEquivalent: "")
+            entry.target = self
+            entry.representedObject = mode.rawValue
+            entry.state = mode == .gestures ? .on : .off
+            touchModeItems.append(entry)
+            touchModeMenu.addItem(entry)
+        }
+        let touchModeParent = NSMenuItem(title: "Touch Mode", action: nil, keyEquivalent: "")
+        touchModeParent.submenu = touchModeMenu
+        menu.addItem(touchModeParent)
         let modeMenu = NSMenu()
         for (title, tag) in [("Automatic", 0), ("Direct only (testing)", 1), ("Warp only (testing)", 2)] {
             let entry = NSMenuItem(title: title, action: #selector(chooseMode(_:)), keyEquivalent: "")
@@ -316,6 +332,21 @@ final class MenuBarApp: NSObject, NSApplicationDelegate {
         stored.save()
         pipeline.update { $0.threeFingerAnchor = anchor }
         log.write("three-finger drag point: \(anchor.rawValue)")
+    }
+
+    @objc private func chooseTouchMode(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let mode = InputMode(rawValue: raw) else { return }
+        touchModeItems.forEach { $0.state = $0 == sender ? .on : .off }
+        pipeline.update { $0.inputMode = mode }
+        // The menu-bar icon shows a special mode, so it isn't left on by accident.
+        let symbol = switch mode {
+        case .gestures: "hand.point.up.left"
+        case .drawing: "pencil.tip"
+        case .multitouch: "hand.raised.fingers.spread"
+        }
+        statusItem.button?.image = NSImage(systemSymbolName: symbol, accessibilityDescription: "TouchBridge")
+            ?? NSImage(systemSymbolName: "hand.point.up.left", accessibilityDescription: "TouchBridge")
+        log.write("touch mode chosen: \(mode.rawValue)")
     }
 
     @objc private func chooseLaunchpadDock(_ sender: NSMenuItem) {

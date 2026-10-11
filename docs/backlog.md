@@ -1,6 +1,6 @@
 # TouchBridge backlog
 
-Requested by the owner on 2026-10-09. Items marked "done" shipped; their notes are kept for reference. Open: 5, 7.
+Requested by the owner on 2026-10-09. Items marked "done" shipped; their notes are kept for reference. Open: none (7 has optional follow-ups).
 
 ## Next session (planned 2026-10-10 for 2026-10-11)
 
@@ -174,11 +174,24 @@ Safari navigates from trackpad two-finger swipes. Our synthesized horizontal scr
 - **Recognizer:** two fingers that start within 15 mm of the panel's right edge and move mostly left for 10 mm. They may move unevenly: the first rule (5 mm zone, fingers moving together) missed most of the owner's attempts, which the log showed as rotate or scroll.
 - **Delivery:** no dock swipe exists for it. Accessibility "press" on the menu-bar clock when the touch display has the active menu bar; otherwise a Warp click on the touch display's own clock (v0.5.1).
 
-## 7. Raw multitouch for painting apps and games
+## 7. Raw multitouch for painting apps and games (done in v1.1.0: touch modes)
 
-The pipeline already tracks up to 10 fingers and exposes them (`InputPipeline.onContacts`). macOS has no public way to give apps raw multi-finger touches, so a painting or game mode would need either:
-- a TouchBridge-aware app (send the contacts over XPC or a local socket), or
-- a per-app mapping of touches to mouse/keyboard input.
+The pipeline tracks up to 10 fingers (`InputPipeline.onContacts`). macOS has no public way to give apps raw multi-finger touches.
+
+- **Owner test (2026-10-11):** in AutoDraw (Safari), the gestures (scroll, pinch, palm rejection, swipes) got in the way of drawing, and no setting turned them off.
+- **Findings:**
+  - Browsers on macOS never produce touch events (`ontouchstart` is absent, `maxTouchPoints` is 0), so web pages see only the mouse.
+  - AutoDraw's touch handler reads only `touches[0]`; its other multitouch code is Hammer.js for zooming.
+  - A finger-painting app from the App Store turned out to be an iPhone/iPad app (a `Wrapper/` bundle, `LSRequiresIPhoneOS`). macOS gives those apps a single touch made from the pointer.
+  - An online touch tester (WBBMTT) listens only for touch events, so on a Mac it reacts to nothing, not even one finger.
+- **v1.1.0: Touch Mode menu (per session):**
+  - **Gestures** is the default.
+  - **Drawing:** the first finger is a pen and everything else is ignored. The first version delivered strokes Direct, and nothing drew: no mouse button was down system-wide, so canvases saw a hovering pointer. Strokes now go through Warp (`dragBegan(hold: true)`).
+  - **Multitouch Apps:** every finger as TUIO 1.1 2Dcur over UDP to `127.0.0.1:3333`, nothing to macOS, with a keepalive once a second. Checked by a listener (up to 5 fingers) and then by the owner in the Event Sink (10 fingers).
+  - **Event Sink:** a TUIO client. It paints every finger in colour and the mouse in grey, as a test canvas.
+- **Optional follow-ups, not built:**
+  - **Safari bridge:** a userscript that injects TouchBridge's fingers as touch or pointer events, for touch-only pages such as that tester.
+  - **"Take turns":** time-share the one mouse between fingers, so several strokes grow at once in ordinary apps, as fragmented strokes.
 
 ## Window dragging (improved 2026-10-09, needs owner's feel test)
 
