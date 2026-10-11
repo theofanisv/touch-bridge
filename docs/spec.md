@@ -221,6 +221,10 @@ Findings from building and testing on the hardware. These override the plan wher
   - `Deliverer.abortGesture()` closes momentum, open phases and pressed buttons, and returns the cursor. It runs on Disable, on Quit, and when the touch display disappears mid-gesture.
   - A Direct gesture that interrupts a Warp gesture returns the cursor immediately.
   - Chromium/Electron apps are never queried through Accessibility, because queries make them build their accessibility tree.
+  - **Crash recovery (v0.6.3, review finding 5):** the press journal records where a press was made, and, for Direct presses, the window, its origin and the app's bundle id. After a crash, the restarted app releases the press there.
+    - Direct: on the same window, with no cursor movement, and only if the same app still runs under that pid.
+    - Warp: at the press point through the window server, so a drag that was under way drops back where it started.
+    - Before, the release went to the cursor's position on the other display, without window fields, or to whichever app had inherited the pid.
 - **System gestures (2026-10-10):**
   - **Dock swipes:** Mission Control, App Exposé, Spaces, Launchpad and Show Desktop are synthesized as the trackpad's private "dock swipe" events (`DockSwipe`, format from Mac Mouse Fix):
     - per step, a type-30 event with subtype 23 (`kIOHIDEventTypeDockSwipe`), phase, swipe type and accumulated progress, followed by a type-29 companion, both posted to the session tap;

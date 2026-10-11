@@ -12,9 +12,28 @@ protocol DeliveryEffects: AnyObject {
     func showCursor()
     func frontmostApp() -> pid_t?
     func activate(_ pid: pid_t)
-    func recordPress(pid: Int32, right: Bool)
+    func recordPress(_ record: PressRecord)
     func clearPress()
-    func pendingPress() -> (pid: Int32, right: Bool)?
+    func pendingPress() -> PressRecord?
+    /// The bundle identifier of a running process; nil when none runs with that pid.
+    func runningApp(_ pid: pid_t) -> String?
+}
+
+/// An open press, journaled so a crash can't leave a mouse button held: enough to release it where it was
+/// made. Before, only the pid was kept, and the release went to the cursor's position (on the other display)
+/// without the window fields Direct delivery needs, or to whichever app had inherited the pid.
+struct PressRecord: Codable, Equatable {
+    /// 0 when pressed through the window server (Warp).
+    var pid: Int32
+    var right: Bool
+    /// Where it was pressed, in global display points (missing in journals from before 0.6.3).
+    var x: Double? = nil
+    var y: Double? = nil
+    /// Direct presses: the target window and its origin, and the app (a restarted system reuses pids).
+    var window: Int? = nil
+    var originX: Double? = nil
+    var originY: Double? = nil
+    var bundleID: String? = nil
 }
 
 /// The real effects: window server, cursor, app activation, press journal on disk.
@@ -36,9 +55,10 @@ final class SystemDeliveryEffects: DeliveryEffects {
     func showCursor() { CursorVisibility.show() }
     func frontmostApp() -> pid_t? { NSWorkspace.shared.frontmostApplication?.processIdentifier }
     func activate(_ pid: pid_t) { NSRunningApplication(processIdentifier: pid)?.activate() }
-    func recordPress(pid: Int32, right: Bool) { journal.record(pid: pid, right: right) }
+    func recordPress(_ record: PressRecord) { journal.record(record) }
     func clearPress() { journal.clear() }
-    func pendingPress() -> (pid: Int32, right: Bool)? { journal.pending() }
+    func pendingPress() -> PressRecord? { journal.pending() }
+    func runningApp(_ pid: pid_t) -> String? { NSRunningApplication(processIdentifier: pid)?.bundleIdentifier }
 }
 
 /// Posts one gesture at a time, either straight to the target app (Direct) or through the
@@ -184,16 +204,31 @@ final class Deliverer {
             let up: CGEventType = button == .right ? .rightMouseUp : .leftMouseUp
             release(up, at: location, button: button, clickState: 1)
         }
-        if let pending = effects.pendingPress() {
-            let up: CGEventType = pending.right ? .rightMouseUp : .leftMouseUp
-            if let event = EventSynth.mouse(up, at: effects.cursorLocation() ?? .zero, button: pending.right ? .right : .left,
-                                            clickState: 1, eventNumber: 0, window: nil, source: directSource) {
-                if pending.pid > 0 { event.postToPid(pending.pid) } else { effects.post(event, to: .warp) }
-            }
-            log("released a press left open by a previous run (pid \(pending.pid))")
-            effects.clearPress()
+        guard let pending = effects.pendingPress() else { returnCursor(); return }
+        effects.clearPress()
+        let cursor = effects.cursorLocation() ?? .zero
+        let at = CGPoint(x: pending.x ?? cursor.x, y: pending.y ?? cursor.y)
+        let button: CGMouseButton = pending.right ? .right : .left
+        let up: CGEventType = pending.right ? .rightMouseUp : .leftMouseUp
+        guard pending.pid > 0 else {
+            // Warp: the window server still holds the button. Release it where it was pressed, so a drag that
+            // was under way drops back where it started; the hidden cursor visits that point briefly.
+            begin(.warp, at: at, appPID: nil, activate: false)
+            release(up, at: at, button: button, clickState: 1)
+            end()
+            log("released a press left open by a previous run at \(Int(at.x)),\(Int(at.y))")
+            return
         }
-        returnCursor()
+        // Direct: on the window it was pressed in, and only if the same app still runs.
+        guard let window = pending.window, let ox = pending.originX, let oy = pending.originY,
+              let app = pending.bundleID, effects.runningApp(pending.pid) == app else {
+            log("a press left open by a previous run belonged to an app that is gone; nothing to release")
+            returnCursor()
+            return
+        }
+        begin(.direct(DirectTarget(pid: pending.pid, window: window, origin: CGPoint(x: ox, y: oy))), at: at, appPID: nil, activate: false)
+        release(up, at: at, button: button, clickState: 1)
+        log("released a press left open by a previous run in \(app) at \(Int(at.x)),\(Int(at.y))")
     }
 
     /// Closes whatever is open (momentum, scroll/pinch/rotate phase, pressed button) and gives the
@@ -291,8 +326,14 @@ final class Deliverer {
 
     private func press(_ type: CGEventType, at point: CGPoint, button: CGMouseButton, clickState: Int) {
         buttonDown = button
-        if case let .direct(direct) = target { effects.recordPress(pid: direct.pid, right: button == .right) } else { effects.recordPress(pid: 0, right: button == .right) }
+        effects.recordPress(pressRecord(at: point, right: button == .right))
         post(EventSynth.mouse(type, at: point, button: button, clickState: clickState, eventNumber: eventNumber, window: window, source: source))
+    }
+
+    private func pressRecord(at point: CGPoint, right: Bool) -> PressRecord {
+        guard case let .direct(d) = target else { return PressRecord(pid: 0, right: right, x: point.x, y: point.y) }
+        return PressRecord(pid: d.pid, right: right, x: point.x, y: point.y, window: d.window,
+                           originX: d.origin.x, originY: d.origin.y, bundleID: effects.runningApp(d.pid))
     }
 
     private func release(_ type: CGEventType, at point: CGPoint, button: CGMouseButton, clickState: Int) {
@@ -340,22 +381,25 @@ final class Deliverer {
 
 /// Remembers an open press on disk so a crash can't leave a mouse button held down.
 final class PressJournal {
-    private let url = FileManager.default.homeDirectoryForCurrentUser.appending(path: "Library/Application Support/TouchBridge/press.json")
+    private let url: URL
 
-    func record(pid: Int32, right: Bool) {
+    init(url: URL = FileManager.default.homeDirectoryForCurrentUser.appending(path: "Library/Application Support/TouchBridge/press.json")) {
+        self.url = url
+    }
+
+    func record(_ press: PressRecord) {
         try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try? JSONSerialization.data(withJSONObject: ["pid": pid, "right": right]).write(to: url)
+        try? JSONEncoder().encode(press).write(to: url)
     }
 
     func clear() {
         try? FileManager.default.removeItem(at: url)
     }
 
-    func pending() -> (pid: Int32, right: Bool)? {
-        guard let data = try? Data(contentsOf: url),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let pid = object["pid"] as? Int32 else { return nil }
-        return (pid, object["right"] as? Bool ?? false)
+    /// Journals written before 0.6.3 hold only `pid` and `right`; they decode with the rest missing.
+    func pending() -> PressRecord? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return try? JSONDecoder().decode(PressRecord.self, from: data)
     }
 }
 

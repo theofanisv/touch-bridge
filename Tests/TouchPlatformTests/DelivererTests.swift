@@ -11,7 +11,8 @@ final class FakeEffects: DeliveryEffects, @unchecked Sendable {
     var hidden = false
     var activated: [pid_t] = []
     var frontmost: pid_t? = 1
-    var press: (pid: Int32, right: Bool)?
+    var press: PressRecord?
+    var running: [pid_t: String] = [42: "com.example.app"]
 
     func post(_ event: CGEvent, to target: Deliverer.Target) {
         posted.append((event.type, event.location,
@@ -26,9 +27,10 @@ final class FakeEffects: DeliveryEffects, @unchecked Sendable {
     func showCursor() { hidden = false }
     func frontmostApp() -> pid_t? { frontmost }
     func activate(_ pid: pid_t) { activated.append(pid); frontmost = pid }
-    func recordPress(pid: Int32, right: Bool) { press = (pid, right) }
+    func recordPress(_ record: PressRecord) { press = record }
     func clearPress() { press = nil }
-    func pendingPress() -> (pid: Int32, right: Bool)? { press }
+    func pendingPress() -> PressRecord? { press }
+    func runningApp(_ pid: pid_t) -> String? { running[pid] }
 }
 
 private let arzopaPoint = CGPoint(x: 2500, y: 500)
@@ -146,6 +148,62 @@ private func make() -> (Deliverer, FakeEffects, DispatchQueue) {
     #expect(fx.posted.last?.subtype == 62, "the gesture is closed too")
 }
 
+// Crash safety (review finding 5): the journal holds enough to release a press where it was made.
+private let journaledDirect = PressRecord(pid: 42, right: false, x: 2500, y: 500, window: 7, originX: 2000, originY: 100, bundleID: "com.example.app")
+
+@Test func aDirectPressIsJournaledWithItsWindowPointAndApp() {
+    let (d, fx, queue) = make()
+    queue.sync {
+        d.begin(direct, at: arzopaPoint, appPID: 42, activate: false)
+        d.dragDown(at: arzopaPoint)
+    }
+    #expect(fx.press == journaledDirect)
+}
+
+@Test func aCrashedDirectPressIsReleasedOnItsWindowWhereItWasPressed() {
+    let (d, fx, queue) = make()
+    fx.press = journaledDirect
+    queue.sync { d.releaseStuckPress() }
+    #expect(fx.posted.count == 1)
+    #expect(fx.posted.last?.type == .leftMouseUp)
+    #expect(fx.posted.last?.location == arzopaPoint, "where it was pressed, not at the cursor")
+    #expect(fx.posted.last?.target == direct, "on the window it was pressed in")
+    #expect(fx.press == nil)
+    #expect(fx.cursor == CGPoint(x: 100, y: 100), "the cursor never moves")
+}
+
+@Test func aCrashedPressIsDroppedWhenItsAppIsGoneOrThePidWasReused() {
+    for running: [pid_t: String] in [[:], [42: "com.other.app"]] {
+        let (d, fx, queue) = make()
+        fx.press = journaledDirect
+        fx.running = running
+        queue.sync { d.releaseStuckPress() }
+        #expect(fx.posted.isEmpty, "\(running)")
+        #expect(fx.press == nil)
+    }
+}
+
+@Test func aCrashedWarpPressIsReleasedWhereItWasPressed() {
+    let (d, fx, queue) = make()
+    fx.press = PressRecord(pid: 0, right: false, x: 2500, y: 500)
+    queue.sync { d.releaseStuckPress() }
+    #expect(fx.posted.last?.type == .leftMouseUp)
+    #expect(fx.posted.last?.location == arzopaPoint, "a drag under way drops back where it started")
+    #expect(fx.posted.last?.target == .warp)
+    Thread.sleep(forTimeInterval: Deliverer.warpReturnDelay + 0.1)
+    queue.sync {}
+    #expect(fx.cursor == CGPoint(x: 100, y: 100))
+    #expect(fx.hidden == false)
+}
+
+@Test func anOldJournalWithoutAPointIsReleasedAtTheCursorAsBefore() {
+    let (d, fx, queue) = make()
+    fx.press = PressRecord(pid: 0, right: true)
+    queue.sync { d.releaseStuckPress() }
+    #expect(fx.posted.last?.type == .rightMouseUp)
+    #expect(fx.posted.last?.location == CGPoint(x: 100, y: 100))
+}
+
 // Review findings 3 and 4: stopping or losing the display mid-gesture must close everything.
 @Test func abortDuringAWarpDragReleasesTheButtonAndTheCursor() {
     let (d, fx, queue) = make()
@@ -231,4 +289,16 @@ private func make() -> (Deliverer, FakeEffects, DispatchQueue) {
 // Owner's choice 2026-10-11: two-finger page swipes, on by default, with a menu switch.
 @Test func swipeBetweenPagesIsOnByDefault() {
     #expect(PipelineSettings().swipeBetweenPages == true)
+}
+
+@Test func theJournalRoundTripsAPressAndReadsTheOldFormat() throws {
+    let url = FileManager.default.temporaryDirectory.appending(path: "touchbridge-journal-\(UUID().uuidString).json")
+    defer { try? FileManager.default.removeItem(at: url) }
+    let journal = PressJournal(url: url)
+    journal.record(journaledDirect)
+    #expect(journal.pending() == journaledDirect)
+    journal.clear()
+    #expect(journal.pending() == nil)
+    try Data(#"{"pid":321,"right":true}"#.utf8).write(to: url)   // written by versions before 0.6.3
+    #expect(journal.pending() == PressRecord(pid: 321, right: true))
 }
