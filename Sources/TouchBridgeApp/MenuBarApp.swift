@@ -17,6 +17,7 @@ final class MenuBarApp: NSObject, NSApplicationDelegate {
     private var dryRunItem: NSMenuItem!
     private var gesturesDirectItem: NSMenuItem!
     private var returnFocusItem: NSMenuItem!
+    private var keepFocusItem: NSMenuItem!
     private var oneFingerScrollItem: NSMenuItem!
     private var threeFingerItem: NSMenuItem!
     private var anchorItems: [NSMenuItem] = []
@@ -54,7 +55,7 @@ final class MenuBarApp: NSObject, NSApplicationDelegate {
         pipeline.update { initial.apply(to: &$0, trackpad: initialTrackpad) }
         log.write("trackpad settings: \(trackpad.summary)\(stored.followTrackpad ? " (followed)" : " (not followed)")")
         watchTrackpadSettings()
-        log.write("settings: delivery \(initial.delivery?.rawValue ?? "automatic"), one-finger drag \(initial.oneFingerScroll ? "scrolls" : "clicks-and-drags"), three-finger drag \(initial.threeFingerDrag ? "on (\(initial.threeFingerAnchor.rawValue))" : "off"), pinch & rotate direct \(initial.gesturesDirect), return focus \(initial.returnFocus), launchpad \(initial.launchpadDock.rawValue)")
+        log.write("settings: delivery \(initial.delivery?.rawValue ?? "automatic"), one-finger drag \(initial.oneFingerScroll ? "scrolls" : "clicks-and-drags"), three-finger drag \(initial.threeFingerDrag ? "on (\(initial.threeFingerAnchor.rawValue))" : "off"), pinch & rotate direct \(initial.gesturesDirect), return focus \(initial.returnFocus), launchpad \(initial.launchpadDock.rawValue), keep focus on space switch \(initial.keepFocusOnSpaceSwitch)")
         if CommandLine.arguments.contains("--dry-run") {
             dryRunItem.state = .on
             pipeline.update { $0.dryRun = true }
@@ -147,6 +148,8 @@ final class MenuBarApp: NSObject, NSApplicationDelegate {
         menu.addItem(launchpadParent)
         returnFocusItem = item(menu, "Return Focus to Previous App", #selector(toggleReturnFocus))
         returnFocusItem.state = stored.returnFocus ? .on : .off
+        keepFocusItem = item(menu, "Keep Focus When Switching Spaces", #selector(toggleKeepFocus))
+        keepFocusItem.state = stored.keepFocusOnSpaceSwitch ? .on : .off
         dryRunItem = item(menu, "Dry Run (log only)", #selector(toggleDryRun))
         menu.addItem(.separator())
         loginItem = item(menu, "Start at Login", #selector(toggleLoginItem))
@@ -266,6 +269,15 @@ final class MenuBarApp: NSObject, NSApplicationDelegate {
         stored.save()
         pipeline.update { $0.focus = on ? .returnToPrevious : .followTouch }
         log.write("focus: \(on ? "return to previous app" : "follow touch")")
+    }
+
+    @objc private func toggleKeepFocus() {
+        let on = keepFocusItem.state != .on
+        keepFocusItem.state = on ? .on : .off
+        stored.keepFocusOnSpaceSwitch = on
+        stored.save()
+        pipeline.update { $0.keepFocusOnSpaceSwitch = on }
+        log.write("space switch: \(on ? "keeps focus on the other display" : "focus follows the switch")")
     }
 
     @objc private func toggleThreeFinger() {

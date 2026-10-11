@@ -15,6 +15,8 @@ struct StoredSettings: Sendable {
     var followTrackpad = true
     /// Launchpad opens on the display with the Dock: what a pinch-in on the touch display does about it.
     var launchpadDock: LaunchpadDockMode = .bringDockAndReturn
+    /// A Space switch by touch gives focus back to the app on the other display.
+    var keepFocusOnSpaceSwitch = true
 
     private static var defaults: UserDefaults { .standard }
 
@@ -28,6 +30,7 @@ struct StoredSettings: Sendable {
         s.threeFingerAnchor = d.string(forKey: "threeFingerAnchor").flatMap(ThreeFingerAnchor.init(rawValue:)) ?? .centroid
         s.followTrackpad = d.object(forKey: "followTrackpad") as? Bool ?? true
         s.launchpadDock = d.string(forKey: "launchpadDock").flatMap(LaunchpadDockMode.init(rawValue:)) ?? .bringDockAndReturn
+        s.keepFocusOnSpaceSwitch = d.object(forKey: "keepFocusOnSpaceSwitch") as? Bool ?? true
         return s
     }
 
@@ -41,6 +44,7 @@ struct StoredSettings: Sendable {
         d.set(threeFingerAnchor.rawValue, forKey: "threeFingerAnchor")
         d.set(followTrackpad, forKey: "followTrackpad")
         d.set(launchpadDock.rawValue, forKey: "launchpadDock")
+        d.set(keepFocusOnSpaceSwitch, forKey: "keepFocusOnSpaceSwitch")
     }
 
     func apply(to p: inout PipelineSettings, trackpad: TrackpadPreferences) {
@@ -56,6 +60,7 @@ struct StoredSettings: Sendable {
         p.threeFingerDrag = threeFingerDrag
         p.threeFingerAnchor = threeFingerAnchor
         p.launchpadDock = launchpadDock
+        p.keepFocusOnSpaceSwitch = keepFocusOnSpaceSwitch
     }
 
     /// The trackpad's "Three-finger drag" setting (System Settings → Accessibility → Pointer Control),

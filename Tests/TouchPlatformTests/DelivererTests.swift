@@ -184,3 +184,8 @@ private func make() -> (Deliverer, FakeEffects, DispatchQueue) {
 @Test func launchpadBringsTheDockOverThenBackByDefault() {
     #expect(PipelineSettings().launchpadDock == .bringDockAndReturn)
 }
+
+// Owner's choice 2026-10-11: a Space switch by touch keeps focus on the other display, as a setting.
+@Test func aSpaceSwitchKeepsFocusByDefault() {
+    #expect(PipelineSettings().keepFocusOnSpaceSwitch == true)
+}

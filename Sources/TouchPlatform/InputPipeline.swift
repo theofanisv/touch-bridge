@@ -17,6 +17,9 @@ public struct PipelineSettings: Sendable {
     public var trackpad: TrackpadPreferences?
     /// Launchpad opens on the display with the Dock: whether a pinch-in on the touch display brings it over.
     public var launchpadDock: LaunchpadDockMode = .bringDockAndReturn
+    /// After a Space switch on the touch display macOS moves focus there; when on, focus that was on another
+    /// display is given back (`FocusKeeper`).
+    public var keepFocusOnSpaceSwitch = true
     public var displayVendor: UInt32 = 7908
     public var displayModel: UInt32 = 342
 
@@ -57,7 +60,6 @@ public final class InputPipeline: @unchecked Sendable {
     /// The dock swipe between its `began` and `ended`/`cancelled`.
     private var openDockSwipe: DockSwipeKind?
     private var swipeHold = DockSwipeHold()
-    private var swipeHoldGeneration = 0
     private var spacesAtSwipeStart: [(String, UInt64)] = []
     /// This pinch parked the cursor to bring the Dock over (so its end gives the cursor back).
     private var dockBroughtForPinch = false
@@ -69,12 +71,15 @@ public final class InputPipeline: @unchecked Sendable {
     private var dockReturnTimer: DispatchSourceTimer?
     /// Between start() and stop(): only a running pipeline moves the Dock.
     private var running = false
+    /// The app that had focus on another display when a Space switch began on the touch display.
+    private var focusBeforeSwitch: pid_t?
+    /// Watching for macOS to move focus after that switch; a new touch cancels it.
+    private var focusKeeper: (keeper: FocusKeeper, generation: Int)?
+    private var focusKeeperGeneration = 0
 
     /// How long the hidden cursor stays on the touch display after a Space switch ends or Notification Center
     /// is opened: past the dock swipe's re-sent end events (0.5 s), so the system has picked its display.
     static let systemGestureCursorDelay: TimeInterval = 0.8
-    /// Longest wait for the touch display to get the active menu bar after a window there was focused.
-    static let activeDisplayWaitMs = 250.0
     /// Longest push against a bottom edge before giving up on moving the Dock.
     static let dockPushTimeoutMs = 1500.0
 
@@ -156,6 +161,7 @@ public final class InputPipeline: @unchecked Sendable {
         closeDockSwipe()
         dockPush = nil
         stopDockReturn()
+        focusKeeper = nil
         if touchCount != 0 {
             touchCount = 0
             onTouchCount?(0, maxTouchCount)
@@ -197,6 +203,9 @@ public final class InputPipeline: @unchecked Sendable {
             contacts[e.id] = e.phase == .ended ? nil : PanelPoint(x: e.x, y: e.y)
         }
         onContacts?(contacts)
+        if focusKeeper != nil, events.contains(where: { $0.phase == .began }) {
+            focusKeeper = nil   // a new touch decides focus itself
+        }
         if !contacts.isEmpty, let push = dockPush, push.back, let home = dockReturn?.home {
             // A touch needs the cursor: stop pushing the Dock back, and try again once the fingers lift.
             dockPush = nil
@@ -285,44 +294,28 @@ public final class InputPipeline: @unchecked Sendable {
 
     // MARK: system gestures
 
-    /// A Space switch acts on the touch display when it has the active menu bar (the focused window's) and
-    /// the cursor: the hidden cursor waits there, and when another display has the active menu bar the window
-    /// under the fingers is focused first and the swipe held until the touch display has it. Mission Control
-    /// and App Exposé cover every display. Launchpad opens on the MacBook whatever the cursor or menu bar
-    /// (self-test 2026-10-11): it follows the Dock's display or the main display, so it is only logged.
+    /// A Space switch acts on the display with the cursor, whichever display has the active menu bar
+    /// (`--system-ui-selftest --spaces`, 2026-10-11): the hidden cursor waits on the touch display. Launchpad
+    /// opens on the display with the Dock (see `bringDockIfNeeded`). Mission Control and App Exposé cover
+    /// every display.
     private func beginDockSwipe(_ kind: DockSwipeKind, delta: Double, at p: CGPoint) {
-        dropHeldSwipe()   // a previous swipe still waiting for the active menu bar never reached the system
-        if dockPush?.back == false { dockPush = nil }   // nor did a pinch still waiting for the Dock
+        // A previous pinch still waiting for the Dock never reached the system: drop it and its push.
+        dropHeldSwipe()
+        if dockPush?.back == false { dockPush = nil }
         openDockSwipe = kind
         dockBroughtForPinch = false
         let activeBar = SystemDisplays.activeMenuBarDisplayUUID()
         status("\(kind) dock swipe → system (active menu bar on \(displayName(activeBar)))")
         guard !settings.dryRun else { return }
         switch kind {
-        case .horizontal: beginSpaceSwitch(at: p, activeBar: activeBar)
+        case .horizontal:
+            spacesAtSwipeStart = SystemDisplays.currentSpaces()
+            // macOS moves focus to the switched display afterwards; focus on another display is kept.
+            focusBeforeSwitch = settings.keepFocusOnSpaceSwitch && activeBar != nil && activeBar != touchDisplayUUID
+                ? NSWorkspace.shared.frontmostApplication?.processIdentifier : nil
+            deliverer.begin(.warp, at: p, appPID: nil, activate: false)
         case .pinch: bringDockIfNeeded(pinchInward: delta > 0, at: p)
         case .vertical: break
-        }
-    }
-
-    private func beginSpaceSwitch(at p: CGPoint, activeBar: String?) {
-        spacesAtSwipeStart = SystemDisplays.currentSpaces()
-        let needsFocus = activeBar == nil || activeBar != touchDisplayUUID
-        let focusTarget = needsFocus ? windowToFocus(near: p) : nil
-        deliverer.begin(.warp, at: p, appPID: focusTarget?.pid, activate: focusTarget != nil)
-        guard needsFocus else { return }
-        guard let window = focusTarget else {
-            status("no window on the touch display to focus; the Space may switch on the other display")
-            return
-        }
-        guard WindowFocus.focus(window) else {
-            status("could not focus \(window.ownerName); the Space may switch on the other display")
-            return
-        }
-        status("focused \(window.ownerName) so the Space switches on the touch display")
-        if activeBar != nil, let touch = touchDisplayUUID {
-            swipeHold.start()
-            waitForActiveMenuBar(on: touch, kind: .horizontal, generation: swipeHoldGeneration, startedNs: DispatchTime.now().uptimeNanoseconds)
         }
     }
 
@@ -435,21 +428,6 @@ public final class InputPipeline: @unchecked Sendable {
         dockReturn = nil
     }
 
-    private func waitForActiveMenuBar(on touch: String, kind: DockSwipeKind, generation: Int, startedNs: UInt64) {
-        guard generation == swipeHoldGeneration, swipeHold.isHolding else { return }
-        let waitedMs = Double(DispatchTime.now().uptimeNanoseconds - startedNs) / 1e6
-        let active = SystemDisplays.activeMenuBarDisplayUUID() == touch
-        if !active, waitedMs < Self.activeDisplayWaitMs {
-            queue.asyncAfter(deadline: .now() + 0.01) { [weak self] in
-                self?.waitForActiveMenuBar(on: touch, kind: kind, generation: generation, startedNs: startedNs)
-            }
-            return
-        }
-        status(active ? "touch display got the active menu bar after \(Int(waitedMs)) ms"
-                      : "touch display did not get the active menu bar within \(Int(waitedMs)) ms")
-        for step in swipeHold.release() { postDockSwipe(kind, step) }
-    }
-
     private func postDockSwipe(_ kind: DockSwipeKind, _ step: DockSwipeHold.Step) {
         let phase: DockSwipe.Phase = switch step.phase { case .began: .began; case .changed: .changed; case .ended: .ended }
         // Before macOS 26, pinch dock swipes need the inverted flag (verified on this Mac).
@@ -463,6 +441,8 @@ public final class InputPipeline: @unchecked Sendable {
         if kind == .horizontal || (dockBroughtForPinch && dockPush == nil) {
             deliverer.end(returnDelay: Self.systemGestureCursorDelay)
         }
+        if kind == .horizontal, let pid = focusBeforeSwitch { keepFocus(on: pid) }
+        focusBeforeSwitch = nil
         let before = spacesAtSwipeStart
         queue.asyncAfter(deadline: .now() + 1.0) { [weak self] in self?.logOutcome(of: kind, spacesBefore: before) }
     }
@@ -470,6 +450,7 @@ public final class InputPipeline: @unchecked Sendable {
     /// Cancels an open dock swipe (palm, stop, display lost) and gives the cursor back.
     private func closeDockSwipe() {
         let heldBack = dropHeldSwipe()
+        focusBeforeSwitch = nil
         guard let kind = openDockSwipe else { return }
         openDockSwipe = nil
         if !heldBack {
@@ -481,23 +462,37 @@ public final class InputPipeline: @unchecked Sendable {
         }
     }
 
-    /// Discards a swipe held back for the active menu bar and stops its wait. True if one was held.
+    /// Discards a swipe held back for the Dock. True if one was held.
     @discardableResult
     private func dropHeldSwipe() -> Bool {
-        swipeHoldGeneration += 1
-        return swipeHold.cancel()
+        swipeHold.cancel()
+    }
+
+    /// Gives focus back to `pid` the first time macOS moves it away within 1.5 s (`FocusKeeper`).
+    private func keepFocus(on pid: pid_t) {
+        focusKeeperGeneration += 1
+        focusKeeper = (FocusKeeper(pid: pid, startedNs: DispatchTime.now().uptimeNanoseconds), focusKeeperGeneration)
+        pollFocus(generation: focusKeeperGeneration)
+    }
+
+    private func pollFocus(generation: Int) {
+        guard let state = focusKeeper, state.generation == generation else { return }   // cancelled
+        switch state.keeper.poll(frontmost: NSWorkspace.shared.frontmostApplication?.processIdentifier,
+                                 atNs: DispatchTime.now().uptimeNanoseconds) {
+        case .wait:
+            queue.asyncAfter(deadline: .now() + 0.05) { [weak self] in self?.pollFocus(generation: generation) }
+        case let .restore(pid):
+            focusKeeper = nil
+            let app = NSRunningApplication(processIdentifier: pid)
+            app?.activate()
+            status("space switch: focus back to \(app?.localizedName ?? "pid \(pid)")")
+        case .stop:
+            focusKeeper = nil
+        }
     }
 
     private func synthKind(_ kind: DockSwipeKind) -> DockSwipe.Kind {
         switch kind { case .horizontal: .horizontal; case .vertical: .vertical; case .pinch: .pinch }
-    }
-
-    /// The window under the fingers, else the frontmost ordinary window on the touch display.
-    private func windowToFocus(near p: CGPoint) -> WindowInfo? {
-        guard let mapper else { return nil }
-        let windows = WindowLocator.onScreenWindows().filter { $0.pid != ownPID && $0.layer == 0 && $0.alpha > 0 }
-        if let under = WindowHitTester.topWindow(at: ScreenPoint(x: p.x, y: p.y), in: windows, excludingPID: ownPID) { return under }
-        return windows.first { mapper.bounds.contains(ScreenPoint(x: $0.bounds.x + $0.bounds.width / 2, y: $0.bounds.y + $0.bounds.height / 2)) }
     }
 
     /// Where the system put the result (diagnostic log line, read-only).

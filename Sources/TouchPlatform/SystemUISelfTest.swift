@@ -7,7 +7,8 @@ import TouchCore
 ///
 /// VISIBLE on screen (opens and closes Notification Center and Launchpad): run only with the owner
 /// watching. `--nc` or `--launchpad` runs one half. `--move-dock` adds a variant that moves the Dock to the
-/// touch display, opens Launchpad, and moves the Dock back.
+/// touch display, opens Launchpad, and moves the Dock back. `--spaces` (only on its own) switches the touch
+/// display's Space with the hidden cursor there and nothing focused, then switches back.
 public enum SystemUISelfTest {
     public static func run(log: @escaping (String) -> Void) {
         guard AXIsProcessTrusted() else { log("needs Accessibility; stopping"); return }
@@ -18,8 +19,9 @@ public enum SystemUISelfTest {
         CursorVisibility.allowHidingInBackground()
         let test = Session(touchID: touch, log: log)
         let args = CommandLine.arguments
-        let all = !args.contains("--nc") && !args.contains("--launchpad")
+        let all = !args.contains("--nc") && !args.contains("--launchpad") && !args.contains("--spaces")
         log("start: \(test.state())")
+        if args.contains("--spaces") { test.spaceSwitch() }
         if all || args.contains("--nc") { test.notificationCenter() }
         if all || args.contains("--launchpad") { test.launchpad(moveDock: args.contains("--move-dock")) }
         test.returnCursor()
@@ -123,6 +125,47 @@ private final class Session {
     private func notificationCenterDisplay() -> String {
         let panels = NotificationCenterOpener.openPanels()
         return panels.isEmpty ? "closed" : panels.map { displayName(centreOf: $0) }.joined(separator: " + ")
+    }
+
+    // MARK: Space switching
+
+    /// Does a Space switch land on the touch display with only the hidden cursor there (no window focused,
+    /// the other display keeping the active menu bar)? Switches back afterwards.
+    func spaceSwitch() {
+        guard let touchSpaces = SystemDisplays.spaceLists().first(where: { $0.uuid == touchUUID }),
+              let index = touchSpaces.spaces.firstIndex(of: touchSpaces.current), touchSpaces.spaces.count > 1 else {
+            log("the touch display has a single Space; nothing to switch")
+            return
+        }
+        let d = index > 0 ? -0.05 : 0.05   // towards a Space that exists: negative = left
+        let before = SystemDisplays.currentSpaces()
+        log("sp-1 Space switch \(d < 0 ? "left" : "right"), cursor held on the touch display, nothing focused: \(state())")
+        park(at: touchCentre)
+        horizontalSwipe(d)
+        Thread.sleep(forTimeInterval: 1.2)
+        log("  → \(changes(from: before))")
+        horizontalSwipe(-d)
+        Thread.sleep(forTimeInterval: 1.2)
+        let restored = SystemDisplays.currentSpaces().map(\.1) == before.map(\.1)
+        log(restored ? "  switched back" : "  not back where it started: \(changes(from: before))")
+        returnCursor()
+    }
+
+    private func horizontalSwipe(_ d: Double) {
+        swipe.post(delta: d, kind: .horizontal, phase: .began)
+        for _ in 0..<10 {
+            Thread.sleep(forTimeInterval: 0.016)
+            swipe.post(delta: d, kind: .horizontal, phase: .changed)
+        }
+        Thread.sleep(forTimeInterval: 0.016)
+        swipe.post(delta: d, kind: .horizontal, phase: .ended)
+    }
+
+    private func changes(from before: [(String, UInt64)]) -> String {
+        let changed = SystemDisplays.currentSpaces()
+            .filter { now in before.first(where: { $0.0 == now.0 })?.1 != now.1 }
+            .map { $0.0 == touchUUID ? "touch display" : "other display" }
+        return changed.isEmpty ? "no Space changed" : "Space changed on \(changed.joined(separator: " + "))"
     }
 
     // MARK: Launchpad

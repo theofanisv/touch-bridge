@@ -141,6 +141,18 @@ enum SystemDisplays {
         return unsafeBitCast(f, to: CopyString.self)(cid)?.takeRetainedValue() as String?
     }
 
+    /// Display UUID → its Spaces in order and the current one.
+    static func spaceLists() -> [(uuid: String, spaces: [UInt64], current: UInt64)] {
+        guard let cid = connection, let f = symbol("SLSCopyManagedDisplaySpaces"),
+              let displays = unsafeBitCast(f, to: CopyArray.self)(cid)?.takeRetainedValue() as? [[String: Any]] else { return [] }
+        return displays.compactMap { d in
+            guard let uuid = d["Display Identifier"] as? String,
+                  let current = ((d["Current Space"] as? [String: Any])?["id64"] as? NSNumber)?.uint64Value else { return nil }
+            let spaces = (d["Spaces"] as? [[String: Any]] ?? []).compactMap { ($0["id64"] as? NSNumber)?.uint64Value }
+            return (uuid, spaces, current)
+        }
+    }
+
     /// Display UUID → current Space id, for every display with its own Spaces.
     static func currentSpaces() -> [(String, UInt64)] {
         guard let cid = connection, let f = symbol("SLSCopyManagedDisplaySpaces"),

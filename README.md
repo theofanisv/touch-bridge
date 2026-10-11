@@ -45,7 +45,7 @@ The app needs **Accessibility** permission (System Settings → Privacy & Securi
 With "Follow Trackpad Settings" on (the default), each gesture follows its switch in System Settings → Trackpad, re-read every 3 s and after wake.
 
 The four-finger gestures are the system's own animated ones: the fingers drive Mission Control, Spaces and Launchpad as on the trackpad.
-- Space switching acts on the touch display. When another display has the active menu bar, the window under the fingers is focused first, and the hidden cursor waits on the touch display until the animation is under way.
+- Space switching acts on the display with the cursor, so the hidden cursor waits on the touch display until the animation is under way. macOS then moves focus to the switched display. With "Keep Focus When Switching Spaces" on (the default), focus that was on the MacBook goes back to that app; touching the panel within 1.5 s leaves focus alone. Off: focus follows the switch.
 - Notification Center opens on the touch display: it appears wherever the cursor is, so the menu-bar clock is pressed while the hidden cursor waits on the touch display (0.8 s).
 - Launchpad opens on the display that has the Dock. A pinch-in on the touch display first brings the Dock there: the hidden cursor pushes against that display's bottom edge, as moving the Dock by hand does. Menu "Launchpad on the Touch Display":
   - Bring the Dock Over, Then Back (default): the Dock lives on the other display. After each Launchpad opened by touch, it returns once Launchpad has closed and no finger is on the panel. This happens even if it was already on the touch display. Choosing this item also sends a Dock found on the touch display home. With this mode, the trackpad keeps opening Launchpad on the MacBook.
@@ -73,6 +73,7 @@ The menu has:
 - Three-Finger Drag (greyed while following the trackpad), Three-Finger Drag Point;
 - Launchpad on the Touch Display: Bring the Dock Over, Then Back (default), Bring the Dock Over (it stays), Leave the Dock Where It Is;
 - Return Focus to Previous App;
+- Keep Focus When Switching Spaces (default on);
 - Dry Run (log only);
 - Start at Login;
 - Open Event Sink, Open Logs Folder, Quit.

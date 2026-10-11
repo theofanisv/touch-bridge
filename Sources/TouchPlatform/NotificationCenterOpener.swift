@@ -59,25 +59,3 @@ enum NotificationCenterOpener {
         return value as? String
     }
 }
-
-/// Makes one window the focused one, so its display gets the active menu bar: the app's main window,
-/// raised, then the app activated. Asks Accessibility only for the app's top-level windows, which is cheap
-/// even for Chromium/Electron apps (no web-content tree).
-enum WindowFocus {
-    static func focus(_ window: WindowInfo) -> Bool {
-        let app = AXUIElementCreateApplication(window.pid)
-        AXUIElementSetMessagingTimeout(app, 0.1)
-        var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &value) == .success,
-              let windows = value as? [AXUIElement] else { return false }
-        let target = CGRect(x: window.bounds.x, y: window.bounds.y, width: window.bounds.width, height: window.bounds.height)
-        guard let match = windows.first(where: { candidate in
-            guard let f = MenuBarProbe.frame(candidate) else { return false }
-            return abs(f.minX - target.minX) < 2 && abs(f.minY - target.minY) < 2 && abs(f.width - target.width) < 2 && abs(f.height - target.height) < 2
-        }) else { return false }
-        AXUIElementSetAttributeValue(match, kAXMainAttribute as CFString, kCFBooleanTrue)
-        AXUIElementPerformAction(match, kAXRaiseAction as CFString)
-        NSRunningApplication(processIdentifier: window.pid)?.activate()
-        return true
-    }
-}

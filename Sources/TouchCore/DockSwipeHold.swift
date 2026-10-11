@@ -1,5 +1,5 @@
-/// Holds a dock swipe's first steps back while the touch display becomes the active display (Space
-/// switching acts on the display with the active menu bar), then releases them as one `began` step.
+/// Holds a dock swipe's first steps back while something is prepared (the Dock brought to the touch display
+/// before Launchpad opens), then releases them as one `began` step.
 public struct DockSwipeHold: Sendable {
     public struct Step: Equatable, Sendable {
         public let delta: Double
