@@ -308,6 +308,7 @@ swift test
 - `swift test` runs the unit tests, the delivery tests and the replay of a real panel recording.
 - `./scripts/bundle.sh` builds and signs `build/TouchBridge.app` for development.
 - `./scripts/install.sh` builds, installs to `~/Applications` and restarts the login item.
+- `CHANGELOG.md` lists the changes in each version.
 
 | Path | Contents |
 |---|---|
