@@ -26,7 +26,8 @@ final class MenuBarApp: NSObject, NSApplicationDelegate {
     private var stored = StoredSettings.load()
     private var trackpad = TrackpadPreferencesReader.read()
     private var followTrackpadItem: NSMenuItem!
-    private let trackpadLine = NSMenuItem(title: "Trackpad settings: …", action: nil, keyEquivalent: "")
+    /// The followed trackpad settings, one indented line each under "Follow Trackpad Settings".
+    private var trackpadLines: [NSMenuItem] = []
     private var trackpadTimer: Timer?
     private var loginItem: NSMenuItem!
     private var modeItems: [NSMenuItem] = []
@@ -119,8 +120,13 @@ final class MenuBarApp: NSObject, NSApplicationDelegate {
         swipePagesItem = item(menu, "Swipe Between Pages (Two Fingers)", #selector(toggleSwipePages))
         swipePagesItem.state = stored.swipeBetweenPages ? .on : .off
         followTrackpadItem = item(menu, "Follow Trackpad Settings", #selector(toggleFollowTrackpad))
-        trackpadLine.isEnabled = false
-        menu.addItem(trackpadLine)
+        for _ in trackpad.settings {
+            let line = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+            line.isEnabled = false
+            line.indentationLevel = 1
+            trackpadLines.append(line)
+            menu.addItem(line)
+        }
         threeFingerItem = item(menu, "Three-Finger Drag", #selector(toggleThreeFinger))
         let anchorMenu = NSMenu()
         for (title, anchor) in [("Centre of the Fingers", ThreeFingerAnchor.centroid), ("First Finger to Touch", .firstFinger)] {
@@ -169,8 +175,10 @@ final class MenuBarApp: NSObject, NSApplicationDelegate {
     private func refreshTrackpadItems() {
         let following = stored.followTrackpad
         followTrackpadItem.state = following ? .on : .off
-        trackpadLine.title = "    Trackpad: \(trackpad.summary)"
-        trackpadLine.isHidden = !following
+        for (line, setting) in zip(trackpadLines, trackpad.settings) {
+            line.title = setting.name.prefix(1).uppercased() + setting.name.dropFirst() + ": " + (setting.on ? "on" : "off")
+            line.isHidden = !following
+        }
         threeFingerItem.isEnabled = !following
         threeFingerItem.state = (following ? trackpad.threeFingerDrag : stored.threeFingerDrag) ? .on : .off
         threeFingerItem.title = following ? "Three-Finger Drag (from Trackpad settings)" : "Three-Finger Drag"

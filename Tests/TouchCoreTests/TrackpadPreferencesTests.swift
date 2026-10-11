@@ -37,3 +37,12 @@ private func ownersTrackpad() -> [String: Any] { [
     #expect(config.rotateEnabled)
     #expect(!config.scrollEnabled)
 }
+
+// The menu lists the followed settings one per line (owner: the single summary line made the menu too wide).
+@Test func theFollowedSettingsAreListedOnePerLine() {
+    let prefs = TrackpadPreferences(values: ["TrackpadPinch": 0])
+    #expect(prefs.settings.map(\.name) == ["3-finger drag", "scroll", "momentum", "pinch", "rotate", "Mission Control",
+                                           "Spaces", "Launchpad/Desktop", "Notification Center"])
+    #expect(prefs.settings.first { $0.name == "pinch" }?.on == false)
+    #expect(prefs.summary.hasPrefix("3-finger drag off · scroll on · momentum on · pinch off"), "the log line stays as it was")
+}

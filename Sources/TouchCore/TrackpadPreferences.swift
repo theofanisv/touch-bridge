@@ -59,10 +59,15 @@ public struct TrackpadPreferences: Equatable, Sendable {
     }
 
     /// One line for the menu and the log.
-    public var summary: String {
+    /// The settings TouchBridge follows, in menu order.
+    public var settings: [(name: String, on: Bool)] {
         [("3-finger drag", threeFingerDrag), ("scroll", scroll), ("momentum", momentum), ("pinch", pinch), ("rotate", rotate),
          ("Mission Control", missionControlSwipe), ("Spaces", spacesSwipe), ("Launchpad/Desktop", launchpadDesktopPinch),
          ("Notification Center", notificationCenterSwipe)]
-            .map { "\($0.0) \($0.1 ? "on" : "off")" }.joined(separator: " · ")
+    }
+
+    /// One line for the log.
+    public var summary: String {
+        settings.map { "\($0.name) \($0.on ? "on" : "off")" }.joined(separator: " · ")
     }
 }

@@ -72,7 +72,7 @@ The menu has:
 - Pinch & Rotate Direct;
 - One-Finger Drag Scrolls;
 - Swipe Between Pages (Two Fingers) (default on);
-- Follow Trackpad Settings, with the trackpad settings it read;
+- Follow Trackpad Settings, with the trackpad settings it read listed underneath, one per line;
 - Three-Finger Drag (greyed while following the trackpad), Three-Finger Drag Point;
 - Launchpad on the Touch Display: Bring the Dock Over, Then Back (default), Bring the Dock Over (it stays), Leave the Dock Where It Is;
 - Return Focus to Previous App;
