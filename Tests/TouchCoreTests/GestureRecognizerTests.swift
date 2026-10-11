@@ -315,6 +315,71 @@ private struct Script {
     #expect(isDragEnded(s.actions.last, near: PanelPoint(x: 0.5, y: 0.5 + mmY(6))))
 }
 
+// MARK: rest a finger, add two (owner's choice 2026-10-11: the drag grabs exactly under the resting finger)
+
+@Test func restingAFingerThenAddingTwoDragsFromTheRestingFinger() {
+    // The owner's settings: one-finger drag scrolls, three-finger drag grabs at the centre of the fingers.
+    // Before, the late fingers were ignored and the first finger's move scrolled.
+    var s = Script(oneFingerDrag: .scroll)
+    s.at(0, began(0, 0.3, 0.5))
+    s.at(250, began(1, 0.45, 0.55))
+    s.at(300, began(2, 0.5, 0.55))
+    s.at(350, moved(0, 0.3, 0.5 + mmY(6)), moved(1, 0.45, 0.55 + mmY(6)), moved(2, 0.5, 0.55 + mmY(6)))
+    #expect(s.actions.count == 2)
+    #expect(isDragBegan(s.actions.first, near: PanelPoint(x: 0.3, y: 0.5), hold: true))
+    #expect(isDragMoved(s.actions.last, near: PanelPoint(x: 0.3, y: 0.5 + mmY(6))))
+    s.at(400, ended(0, 0.3, 0.5 + mmY(6)), ended(1, 0.45, 0.55 + mmY(6)), ended(2, 0.5, 0.55 + mmY(6)))
+    #expect(isDragEnded(s.actions.last, near: PanelPoint(x: 0.3, y: 0.5 + mmY(6))))
+}
+
+// Owner's pick 2026-10-11: grab where the resting finger first touched, not where it rolled to.
+@Test func theRestingFingerGrabsWhereItFirstTouched() {
+    var s = Script(oneFingerDrag: .scroll)
+    s.at(0, began(0, 0.3, 0.5))
+    s.at(150, moved(0, 0.3 + mmX(2), 0.5))   // the finger rolls 2 mm (within the tap slop) as the others land
+    s.at(250, began(1, 0.45, 0.55))
+    s.at(300, began(2, 0.5, 0.55))
+    s.at(350, moved(0, 0.3 + mmX(2), 0.5 + mmY(6)), moved(1, 0.45, 0.55 + mmY(6)), moved(2, 0.5, 0.55 + mmY(6)))
+    #expect(isDragBegan(s.actions.first, near: PanelPoint(x: 0.3, y: 0.5), hold: true), "where it first touched")
+    #expect(isDragMoved(s.actions.last, near: PanelPoint(x: 0.3, y: 0.5 + mmY(6))), "then moves with the hand, without jumping by the roll")
+}
+
+@Test func restingThenAddingTwoWithoutMovingDoesNothing() {
+    var s = Script()
+    s.at(0, began(0, 0.3, 0.5))
+    s.at(300, began(1, 0.45, 0.55), began(2, 0.5, 0.55))
+    s.at(900, ended(1, 0.45, 0.55), ended(2, 0.5, 0.55))
+    s.at(950, ended(0, 0.3, 0.5))
+    #expect(s.actions.isEmpty, "no tap, no right-click")
+}
+
+@Test func oneLateFingerIsStillIgnored() {
+    var s = Script()
+    s.at(0, began(0, 0.3, 0.5))
+    s.at(200, began(1, 0.45, 0.55))
+    s.at(300, ended(1, 0.45, 0.55))
+    s.at(350, ended(0, 0.3, 0.5))
+    #expect(s.actions == [.tap(at: PanelPoint(x: 0.3, y: 0.5), count: 1)])
+}
+
+@Test func twoFingersAddedAfterTheRestWindowAreIgnoredAsBefore() {
+    var s = Script(oneFingerDrag: .scroll)
+    s.at(0, began(0, 0.3, 0.5))
+    s.at(1_600, began(1, 0.45, 0.55), began(2, 0.5, 0.55))
+    s.at(1_700, ended(1, 0.45, 0.55), ended(2, 0.5, 0.55))
+    s.at(1_750, ended(0, 0.3, 0.5))
+    #expect(s.actions == [.rightClick(at: PanelPoint(x: 0.3, y: 0.5))], "a long press")
+}
+
+@Test func withThreeFingerDragOffRestingThenAddingTwoBehavesAsBefore() {
+    var s = Script { $0.threeFingerDrag = false }
+    s.at(0, began(0, 0.3, 0.5))
+    s.at(300, began(1, 0.45, 0.55), began(2, 0.5, 0.55))
+    s.at(350, ended(1, 0.45, 0.55), ended(2, 0.5, 0.55))
+    s.at(400, ended(0, 0.3, 0.5))
+    #expect(s.actions == [.tap(at: PanelPoint(x: 0.3, y: 0.5), count: 1)])
+}
+
 // Centroids of three coordinates can differ from the exact value in the last binary digit.
 private func near(_ a: PanelPoint, _ b: PanelPoint) -> Bool { abs(a.x - b.x) < 1e-9 && abs(a.y - b.y) < 1e-9 }
 private func isDragBegan(_ action: GestureAction?, near p: PanelPoint, hold: Bool) -> Bool {

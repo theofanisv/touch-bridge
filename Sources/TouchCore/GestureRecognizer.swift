@@ -73,6 +73,9 @@ public struct GestureConfig: Codable, Equatable, Sendable {
     public var threeFingerAnchor: ThreeFingerAnchor = .centroid
     /// The third finger must land within this time of the first.
     public var threeFingerWindowNs: UInt64 = 250_000_000
+    /// "Rest a finger, add two": two fingers joining a still first finger within this time start a
+    /// three-finger drag that grabs under the resting finger.
+    public var restingDragWindowNs: UInt64 = 1_500_000_000
     /// Two-finger gestures that are switched on (trackpad settings).
     public var scrollEnabled = true
     public var pinchEnabled = true
@@ -143,6 +146,9 @@ public struct GestureRecognizer: Sendable {
         var positions: [UInt8: PanelPoint]
         var dragging = false
         var lastAnchor: PanelPoint
+        /// Started by resting the first finger, then adding two: the drag grabs where that finger first
+        /// touched, then follows its movement.
+        var restingGrab: PanelPoint?
     }
 
     private struct MultiFinger: Sendable {
@@ -199,6 +205,8 @@ public struct GestureRecognizer: Sendable {
         config.notificationCenterSwipe = true
     }
     private var active: [UInt8: PanelPoint] = [:]
+    /// Fingers that joined a resting first finger after the two-finger window (see `restingDragWindowNs`).
+    private var restingExtras: [UInt8: PanelPoint] = [:]
     private var lastTap: (ns: UInt64, at: PanelPoint, count: Int)?
     private var twoFingerMoved = false
     private var threeFingerMoved = false
@@ -252,13 +260,35 @@ public struct GestureRecognizer: Sendable {
         case .idle:
             if event.phase == .began {
                 state = .oneFinger(id: event.id, downNs: now, origin: point, current: point)
+                restingExtras = [:]
             }
             return []
 
         case let .oneFinger(id, downNs, origin, current):
             if event.id != id {
-                guard event.phase == .began, now - downNs <= config.twoFingerWindowNs else { return [] }
-                state = .twoFinger(startTwoFinger(id, current, event.id, point, now, firstDownNs: downNs))
+                // The first finger is still (it would have left this state after moving past the tap slop).
+                switch event.phase {
+                case .began where now - downNs <= config.twoFingerWindowNs:
+                    restingExtras = [:]
+                    state = .twoFinger(startTwoFinger(id, current, event.id, point, now, firstDownNs: downNs))
+                    return []
+                case .began where config.threeFingerDrag && now - downNs <= config.restingDragWindowNs:
+                    restingExtras[event.id] = point
+                case .moved where restingExtras[event.id] != nil:
+                    restingExtras[event.id] = point
+                case .ended:
+                    restingExtras[event.id] = nil
+                    return []
+                default:
+                    return []   // one late finger alone is ignored, as before
+                }
+                guard restingExtras.count == 2 else { return [] }
+                // Rest a finger, add two: a three-finger drag that grabs under the resting finger.
+                var start = restingExtras
+                start[id] = current
+                let ids = [id] + restingExtras.keys.sorted()
+                restingExtras = [:]
+                state = .threeFinger(ThreeFinger(ids: ids, firstDownNs: downNs, start: start, positions: start, lastAnchor: origin, restingGrab: origin))
                 return []
             }
             switch event.phase {
@@ -448,23 +478,26 @@ public struct GestureRecognizer: Sendable {
 
     /// Three fingers moving together drag (like the trackpad setting), from their centre or the first finger.
     private func updateThreeFinger(_ t: inout ThreeFinger) -> [GestureAction] {
-        let anchor = anchorPoint(t.positions, first: t.ids[0])
+        let anchor = anchorPoint(t.positions, of: t)
         if !t.dragging {
             guard distanceMm(centroid(t.positions), centroid(t.start)) > config.twoFingerDecisionMm else { return [] }
             t.dragging = true
             t.lastAnchor = anchor
-            return [.dragBegan(at: anchorPoint(t.start, first: t.ids[0]), hold: true), .dragMoved(to: anchor)]
+            return [.dragBegan(at: anchorPoint(t.start, of: t), hold: true), .dragMoved(to: anchor)]
         }
         guard anchor != t.lastAnchor else { return [] }
         t.lastAnchor = anchor
         return [.dragMoved(to: anchor)]
     }
 
-    private func anchorPoint(_ points: [UInt8: PanelPoint], first: UInt8) -> PanelPoint {
-        switch config.threeFingerAnchor {
-        case .centroid: centroid(points)
-        case .firstFinger: points[first] ?? centroid(points)
+    private func anchorPoint(_ points: [UInt8: PanelPoint], of t: ThreeFinger) -> PanelPoint {
+        if let grab = t.restingGrab, let p = points[t.ids[0]], let p0 = t.start[t.ids[0]] {
+            // Where the resting finger first touched (it may roll a little as the others land), moved as far
+            // as that finger has moved since.
+            return PanelPoint(x: grab.x + p.x - p0.x, y: grab.y + p.y - p0.y)
         }
+        if config.threeFingerAnchor == .firstFinger { return points[t.ids[0]] ?? centroid(points) }
+        return centroid(points)
     }
 
     private func centroid(_ points: [UInt8: PanelPoint]) -> PanelPoint {
@@ -594,6 +627,7 @@ public struct GestureRecognizer: Sendable {
         default: actions = []
         }
         state = .ignoring
+        restingExtras = [:]
         return actions
     }
 

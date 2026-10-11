@@ -235,6 +235,7 @@ Findings from building and testing on the hardware. These override the plan wher
   - **v0.5.2:** Notification Center: press the clock with the hidden cursor on the touch display for 0.8 s (the v0.5.1 click below was replaced). Pinches no longer park the cursor.
   - **Launchpad follows the Dock** (self-test lp-4). The Dock moves to a display when the cursor pushes against its bottom edge, and synthetic mouse-moved events with a downward delta do that.
   - **v0.5.3:** a pinch-in on the touch display brings the Dock there first, as a setting: bring over (default), bring over then back, or leave (`LaunchpadDock`, `DockLocator`, `Deliverer.nudge`).
+  - **v0.5.9 (three-finger drag):** rest a finger, add two. Two fingers joining a resting first finger within 1.5 s start a three-finger drag that grabs under the resting finger (`restingDragWindowNs`). v0.5.10: at the point where that finger first touched, then following its movement.
   - **v0.5.7–0.5.8:** after a Space switch on the touch display, macOS moves focus there. When another display had the active menu bar, that app is re-activated once, within 1.5 s; a new touch cancels this (`FocusKeeper`). It's a setting, "Keep Focus When Switching Spaces", on by default.
   - **v0.5.6:** Space switching follows the cursor, not the active menu bar (self-test `--spaces`). The focusing step was removed; only the hidden cursor waits on the touch display.
   - **v0.5.5:** "then back" is the default.

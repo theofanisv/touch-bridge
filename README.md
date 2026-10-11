@@ -37,6 +37,7 @@ The app needs **Accessibility** permission (System Settings → Privacy & Securi
 | Two fingers around each other | Rotate |
 | Two fingers from the right edge, moving left | Notification Center |
 | Three fingers moving together | Click-and-drag (grabs at the centre of the fingers, or under the first finger: menu "Three-Finger Drag Point") |
+| One finger resting on an item, two more added within 1.5 s, then moving | Click-and-drag that grabs exactly where the resting finger first touched |
 | Four fingers up / down | Mission Control / App Exposé |
 | Four fingers left / right | Switch Space |
 | Thumb and three or four fingers pinching / spreading | Launchpad / Show Desktop |

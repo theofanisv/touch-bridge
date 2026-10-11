@@ -1,6 +1,6 @@
 # TouchBridge backlog
 
-Requested by the owner on 2026-10-09. Items marked "done" shipped; their notes are kept for reference. Open: 0, 5, 7.
+Requested by the owner on 2026-10-09. Items marked "done" shipped; their notes are kept for reference. Open: 5, 7.
 
 ## Next session (planned 2026-10-10 for 2026-10-11)
 
@@ -103,12 +103,19 @@ Shipped as the dock-swipe pinch (type 3; on macOS 15 it needs the "inverted" fla
 - **Delivery:** dock-swipe pinch events (Mac Mouse Fix uses type constant 4.2e-45 for pinch), or `open -a Launchpad`, or the Show Desktop shortcut (F11).
 - **Note:** macOS 26 replaces Launchpad with the Apps view, so check the target version.
 
-## 0. Three-finger drag: grab precision (revisit at the end)
+## 0. Three-finger drag: grab precision (done in v0.5.10)
 
 Shipped in v0.3.0: three fingers moving together = click-and-drag, grabbing at the centre of the fingers or, by menu setting, under the first finger.
 
 - **Owner feedback (2026-10-10):** "generally good but not perfect. The problem is mainly at the start: how to select the element that I want to drag."
-- **Ideas:**
+- **v0.5.9, the owner's pick: rest a finger, add two.** One finger rests on the item (within the 3 mm tap slop). Two more fingers join within 1.5 s and the hand moves. The drag grabs exactly under the resting finger, whatever the grab-point setting says.
+  - A single late finger is still ignored, and fingers added after 1.5 s too.
+  - Holding still and lifting does nothing (no right-click).
+  - The real recording replays identically.
+  - **Owner test:** "generally it is better", though not as effortless as on the trackpad, where the cursor has already picked the target before the fingers drag. Here the extra fingers must land a little away from the resting one.
+  - **v0.5.10:** the drag grabs where the resting finger first touched, not where it may have rolled to as the others landed (up to 3 mm), then moves with that finger without jumping.
+  - **Kept for later, if needed:** rest a finger and add only one (less crowding), or a marker at the grab point.
+- **Other ideas, if it still isn't precise enough:**
   - Show a small marker at the grab point while three fingers are down, so you can see what will be grabbed before moving.
   - Snap the grab to the draggable element nearest the fingers (Accessibility: text, file, title bar), instead of a geometric point.
   - Two-step: the first finger rests on the item, which fixes the grab point precisely; the next two fingers start the drag.
